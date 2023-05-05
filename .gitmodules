@@ -1,0 +1,3 @@
+[submodule "libxdp-sys/xdp-tools"]
+	path = libxdp-sys/xdp-tools
+	url = git@github.com:xdp-project/xdp-tools.git
