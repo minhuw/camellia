@@ -17575,6 +17575,57 @@ pub struct xsk_socket {
     _unused: [u8; 0],
 }
 extern "C" {
+    pub fn xsk_ring_prod__fill_addr(fill: *mut xsk_ring_prod, idx: __u32) -> *mut __u64;
+}
+extern "C" {
+    pub fn xsk_ring_cons__comp_addr(comp: *const xsk_ring_cons, idx: __u32) -> *const __u64;
+}
+extern "C" {
+    pub fn xsk_ring_prod__tx_desc(tx: *mut xsk_ring_prod, idx: __u32) -> *mut xdp_desc;
+}
+extern "C" {
+    pub fn xsk_ring_cons__rx_desc(rx: *const xsk_ring_cons, idx: __u32) -> *const xdp_desc;
+}
+extern "C" {
+    pub fn xsk_ring_prod__needs_wakeup(r: *const xsk_ring_prod) -> ::std::os::raw::c_int;
+}
+extern "C" {
+    pub fn xsk_prod_nb_free(r: *mut xsk_ring_prod, nb: __u32) -> __u32;
+}
+extern "C" {
+    pub fn xsk_cons_nb_avail(r: *mut xsk_ring_cons, nb: __u32) -> __u32;
+}
+extern "C" {
+    pub fn xsk_ring_prod__reserve(prod: *mut xsk_ring_prod, nb: __u32, idx: *mut __u32) -> __u32;
+}
+extern "C" {
+    pub fn xsk_ring_prod__submit(prod: *mut xsk_ring_prod, nb: __u32);
+}
+extern "C" {
+    pub fn xsk_ring_cons__peek(cons: *mut xsk_ring_cons, nb: __u32, idx: *mut __u32) -> __u32;
+}
+extern "C" {
+    pub fn xsk_ring_cons__cancel(cons: *mut xsk_ring_cons, nb: __u32);
+}
+extern "C" {
+    pub fn xsk_ring_cons__release(cons: *mut xsk_ring_cons, nb: __u32);
+}
+extern "C" {
+    pub fn xsk_umem__get_data(
+        umem_area: *mut ::std::os::raw::c_void,
+        addr: __u64,
+    ) -> *mut ::std::os::raw::c_void;
+}
+extern "C" {
+    pub fn xsk_umem__extract_addr(addr: __u64) -> __u64;
+}
+extern "C" {
+    pub fn xsk_umem__extract_offset(addr: __u64) -> __u64;
+}
+extern "C" {
+    pub fn xsk_umem__add_offset_to_addr(addr: __u64) -> __u64;
+}
+extern "C" {
     pub fn xsk_umem__fd(umem: *const xsk_umem) -> ::std::os::raw::c_int;
 }
 extern "C" {
