@@ -7,6 +7,7 @@ use libxdp_sys::xsk_ring_cons__peek;
 use libxdp_sys::xsk_ring_cons__release;
 use libxdp_sys::xsk_ring_cons__rx_desc;
 use libxdp_sys::xsk_ring_prod__reserve;
+use libxdp_sys::xsk_ring_prod__submit;
 use libxdp_sys::xsk_ring_prod__tx_desc;
 use libxdp_sys::xsk_socket;
 use libxdp_sys::xsk_socket__create;
@@ -103,12 +104,19 @@ impl<'a> XskSocket<'a> {
                 ((*rx_desp).addr, (*rx_desp).len)
             };
 
-            let chunk = self.umem.extract(addr);
+            let chunk = self.umem.extract_recv(addr);
             frames[output_index] = FrameReceive::from_chunk(chunk, addr as usize, len as usize);
         }
 
         unsafe {
             xsk_ring_cons__release(&mut self.rx.inner, received);
+        }
+
+        // TODO: add an option controlling whether to fill the umem eagerly
+        let filled = self.umem.fill(received as usize)?;
+
+        if filled < (received as usize) {
+            log::warn!("fill failed, filled: {}, received: {}", filled, received);
         }
 
         Ok(received as usize)
@@ -132,6 +140,9 @@ impl<'a> XskSocket<'a> {
     {
         let mut start_index = 0;
         let mut remaining = Vec::new();
+
+        self.umem.recycle();
+
         let iter = frames.into_iter();
 
         let reserved_desp = unsafe {
@@ -151,9 +162,15 @@ impl<'a> XskSocket<'a> {
                     (*tx_desc).len = frame.len() as u32;
                     (*tx_desc).options = 0;
                 };
+
+                self.umem.register_send(frame.chunk())
             } else {
                 remaining.push(frame);
             }
+        }
+
+        unsafe {
+            xsk_ring_prod__submit(&mut self.tx.inner, actual_sent);
         }
 
         Ok(remaining)

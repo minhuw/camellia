@@ -64,6 +64,7 @@ dependencies = [
  "libbpf-rs",
  "libc",
  "libxdp-sys",
+ "log",
  "nix",
  "thiserror",
 ]

@@ -6,4 +6,6 @@ pub enum CamelliaError {
     SystemError(#[from] nix::errno::Errno),
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
+    #[error("resource exhausted: {0}")]
+    ResourceExhausted(String),
 }
