@@ -7,9 +7,12 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.71"
+libxdp-sys = { path = "../libxdp-sys" }
 ctrlc = "3.2.5"
 libbpf-rs = "0.20.1"
 libc = "0.2.142"
+nix = "0.26.2"
+thiserror = "1.0.40"
 
 [build-dependencies]
 libbpf-cargo = "0.20.1"

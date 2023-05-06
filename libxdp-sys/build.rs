@@ -1,6 +1,5 @@
 extern crate bindgen;
 
-use anyhow;
 use std::{env, path::PathBuf, process::Command};
 
 fn main() -> anyhow::Result<()> {
