@@ -21,6 +21,7 @@ pkgs.mkShell {
     pkgconfig
     jq
     rustup
+    strace
     openssh
     which
     zlib
