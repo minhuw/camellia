@@ -122,6 +122,21 @@ impl<'a> XskSocket<'a> {
         Ok(received as usize)
     }
 
+    pub fn allocate_frames(&mut self) -> Result<FrameSend<'a>, CamelliaError> {
+        let mut frames = Vec::with_capacity(1);
+        match self.umem.allocate(&mut frames)? {
+            0 => Err(CamelliaError::ResourceExhausted(
+                "there is no free frames".to_string(),
+            )),
+            1 => Ok(frames.pop().unwrap()),
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn allocate_tx_bulk(&mut self, frames: &mut [FrameSend]) -> Result<usize, CamelliaError> {
+        self.umem.allocate(frames)
+    }
+
     pub fn send(&mut self, frame: FrameSend<'a>) -> Result<Option<FrameSend>, CamelliaError> {
         let mut remaining = self.send_bulk([frame])?;
         assert!(remaining.len() <= 1);

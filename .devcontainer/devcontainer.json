@@ -11,7 +11,8 @@
     "customizations": {
         "vscode": {
             "extensions": [
-                "GitHub.copilot-nightly"
+                "GitHub.copilot-nightly",
+                "github.vscode-github-actions"
             ]
         }
     }

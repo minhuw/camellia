@@ -21,7 +21,7 @@ impl MMapArea {
                 None,
                 NonZeroUsize::new_unchecked(size),
                 ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
-                MapFlags::empty(),
+                MapFlags::MAP_SHARED | MapFlags::MAP_ANONYMOUS,
                 0,
                 0,
             )?
@@ -48,5 +48,16 @@ impl Drop for MMapArea {
                 self.base_address, self.length, e
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::umem::mmap::MMapArea;
+
+    #[test]
+    fn test_mmap() {
+        let mmap_area = MMapArea::new(4096).unwrap();
+        assert_ne!(mmap_area.base_address(), 0);
     }
 }

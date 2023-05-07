@@ -292,3 +292,14 @@ impl AsRawFd for UMem {
         unsafe { xsk_umem__fd(self.inner) }
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_umem_create() {
+        let umem = UMem::new(2048, 1024).unwrap();
+        assert_eq!(umem.chunks.len(), 1024);
+    }
+}
