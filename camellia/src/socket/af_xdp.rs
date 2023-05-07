@@ -1,7 +1,9 @@
+use std::cell::RefCell;
 use std::cmp::min;
 use std::ffi::CString;
 use std::mem::MaybeUninit;
 use std::os::fd::AsRawFd;
+use std::rc::Rc;
 
 use libxdp_sys::xsk_ring_cons__peek;
 use libxdp_sys::xsk_ring_cons__release;
@@ -17,8 +19,9 @@ use libxdp_sys::{xsk_ring_cons, xsk_ring_prod};
 use nix::errno::Errno;
 
 use crate::error::CamelliaError;
-use crate::umem::frame::FrameReceive;
-use crate::umem::frame::FrameSend;
+use crate::umem::frame::AppFrame;
+use crate::umem::frame::RxFrame;
+use crate::umem::frame::TxFrame;
 use crate::umem::frame::UMem;
 
 pub struct RxQueue {
@@ -31,22 +34,19 @@ pub struct TxQueue {
 
 pub struct TxDescriptor {}
 
-pub struct XskSocket<'a> {
+pub struct XskSocket {
     inner: *mut xsk_socket,
-    umem: &'a mut UMem,
+    umem: Rc<RefCell<UMem>>,
     rx: RxQueue,
     tx: TxQueue,
 }
 
-impl<'a> XskSocket<'a> {
-    pub fn new<'b>(
+impl XskSocket {
+    pub fn new(
         ifname: &str,
         queue_index: u32,
-        umem: &'b mut UMem,
-    ) -> Result<Self, CamelliaError>
-    where
-        'b: 'a,
-    {
+        umem: Rc<RefCell<UMem>>,
+    ) -> Result<Self, CamelliaError> {
         let mut raw_socket: *mut xsk_socket = std::ptr::null_mut();
         let mut rx_queue = MaybeUninit::<RxQueue>::zeroed();
         let mut tx_queue = MaybeUninit::<TxQueue>::zeroed();
@@ -57,7 +57,7 @@ impl<'a> XskSocket<'a> {
                 &mut raw_socket,
                 ifname.as_ptr(),
                 queue_index,
-                umem.inner(),
+                umem.borrow_mut().inner(),
                 &mut (*rx_queue.as_mut_ptr()).inner,
                 &mut (*tx_queue.as_mut_ptr()).inner,
                 std::ptr::null(),
@@ -72,7 +72,7 @@ impl<'a> XskSocket<'a> {
         })
     }
 
-    pub fn recv(&mut self) -> Result<Option<FrameReceive>, CamelliaError> {
+    pub fn recv(&mut self) -> Result<Option<RxFrame>, CamelliaError> {
         let mut frames = Vec::with_capacity(1);
 
         let received = self.recv_bulk(&mut frames)?;
@@ -86,7 +86,7 @@ impl<'a> XskSocket<'a> {
         }
     }
 
-    pub fn recv_bulk(&mut self, frames: &mut [FrameReceive]) -> Result<usize, CamelliaError> {
+    pub fn recv_bulk(&mut self, frames: &mut [RxFrame]) -> Result<usize, CamelliaError> {
         let mut start_index = 0;
         let received: u32 = unsafe {
             xsk_ring_cons__peek(&mut self.rx.inner, frames.len() as u32, &mut start_index)
@@ -104,8 +104,8 @@ impl<'a> XskSocket<'a> {
                 ((*rx_desp).addr, (*rx_desp).len)
             };
 
-            let chunk = self.umem.extract_recv(addr);
-            frames[output_index] = FrameReceive::from_chunk(chunk, addr as usize, len as usize);
+            let chunk = self.umem.borrow_mut().extract_recv(addr);
+            frames[output_index] = RxFrame::from_chunk(chunk, addr as usize, len as usize);
         }
 
         unsafe {
@@ -113,7 +113,7 @@ impl<'a> XskSocket<'a> {
         }
 
         // TODO: add an option controlling whether to fill the umem eagerly
-        let filled = self.umem.fill(received as usize)?;
+        let filled = self.umem.borrow_mut().fill(received as usize)?;
 
         if filled < (received as usize) {
             log::warn!("fill failed, filled: {}, received: {}", filled, received);
@@ -122,22 +122,11 @@ impl<'a> XskSocket<'a> {
         Ok(received as usize)
     }
 
-    pub fn allocate_frames(&mut self) -> Result<FrameSend<'a>, CamelliaError> {
-        let mut frames = Vec::with_capacity(1);
-        match self.umem.allocate(&mut frames)? {
-            0 => Err(CamelliaError::ResourceExhausted(
-                "there is no free frames".to_string(),
-            )),
-            1 => Ok(frames.pop().unwrap()),
-            _ => unreachable!(),
-        }
+    pub fn allocate(&mut self, n: usize) -> Result<Vec<AppFrame>, CamelliaError> {
+        UMem::allocate(&mut self.umem, n)
     }
 
-    pub fn allocate_tx_bulk(&mut self, frames: &mut [FrameSend]) -> Result<usize, CamelliaError> {
-        self.umem.allocate(frames)
-    }
-
-    pub fn send(&mut self, frame: FrameSend<'a>) -> Result<Option<FrameSend>, CamelliaError> {
+    pub fn send<'a>(&mut self, frame: TxFrame<'a>) -> Result<Option<TxFrame<'a>>, CamelliaError> {
         let mut remaining = self.send_bulk([frame])?;
         assert!(remaining.len() <= 1);
 
@@ -148,15 +137,15 @@ impl<'a> XskSocket<'a> {
         }
     }
 
-    pub fn send_bulk<T>(&mut self, frames: T) -> Result<Vec<FrameSend>, CamelliaError>
+    pub fn send_bulk<'a, T>(&mut self, frames: T) -> Result<Vec<TxFrame<'a>>, CamelliaError>
     where
-        T: IntoIterator<Item = FrameSend<'a>>,
+        T: IntoIterator<Item = TxFrame<'a>>,
         T::IntoIter: ExactSizeIterator,
     {
         let mut start_index = 0;
         let mut remaining = Vec::new();
 
-        self.umem.recycle();
+        self.umem.borrow_mut().recycle();
 
         let iter = frames.into_iter();
 
@@ -178,7 +167,7 @@ impl<'a> XskSocket<'a> {
                     (*tx_desc).options = 0;
                 };
 
-                self.umem.register_send(frame.chunk())
+                self.umem.borrow_mut().register_send(frame.chunk())
             } else {
                 remaining.push(frame);
             }
@@ -192,13 +181,13 @@ impl<'a> XskSocket<'a> {
     }
 }
 
-impl Drop for XskSocket<'_> {
+impl Drop for XskSocket {
     fn drop(&mut self) {
         unsafe { xsk_socket__delete(self.inner) }
     }
 }
 
-impl AsRawFd for XskSocket<'_> {
+impl AsRawFd for XskSocket {
     fn as_raw_fd(&self) -> std::os::fd::RawFd {
         unsafe { xsk_socket__fd(self.inner) }
     }
