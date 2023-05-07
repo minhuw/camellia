@@ -10,7 +10,9 @@ use libc::c_void;
 use libxdp_sys::{
     xsk_ring_cons, xsk_ring_cons__comp_addr, xsk_ring_cons__peek, xsk_ring_prod,
     xsk_ring_prod__fill_addr, xsk_ring_prod__reserve, xsk_ring_prod__submit, xsk_umem,
-    xsk_umem__create, xsk_umem__delete, xsk_umem__fd,
+    xsk_umem__create, xsk_umem__delete, xsk_umem__fd, xsk_umem_config,
+    XSK_RING_CONS__DEFAULT_NUM_DESCS, XSK_RING_PROD__DEFAULT_NUM_DESCS,
+    XSK_UMEM__DEFAULT_FRAME_HEADROOM, XSK_UMEM__DEFAULT_FRAME_SIZE,
 };
 use nix::errno::Errno;
 
@@ -245,6 +247,69 @@ pub struct CompletionQueue {
     inner: xsk_ring_cons,
 }
 
+pub struct UMemBuilder {
+    chunk_size: u32,
+    num_chunks: Option<u32>,
+    frame_headroom: u32,
+    fill_queue_size: u32,
+    completion_queue_size: u32,
+}
+
+impl UMemBuilder {
+    pub fn new() -> Self {
+        UMemBuilder {
+            chunk_size: XSK_UMEM__DEFAULT_FRAME_SIZE,
+            num_chunks: None,
+            frame_headroom: XSK_UMEM__DEFAULT_FRAME_HEADROOM,
+            fill_queue_size: XSK_RING_PROD__DEFAULT_NUM_DESCS,
+            completion_queue_size: XSK_RING_CONS__DEFAULT_NUM_DESCS,
+        }
+    }
+
+    pub fn chunk_size(mut self, chunk_size: u32) -> Self {
+        self.chunk_size = chunk_size;
+        self
+    }
+
+    pub fn num_chunks(mut self, num_chunks: u32) -> Self {
+        self.num_chunks.replace(num_chunks);
+        self
+    }
+
+    pub fn frame_headroom(mut self, frame_headroom: u32) -> Self {
+        self.frame_headroom = frame_headroom;
+        self
+    }
+
+    pub fn fill_queue_size(mut self, fill_queue_size: u32) -> Self {
+        self.fill_queue_size = fill_queue_size;
+        self
+    }
+
+    pub fn completion_queue_size(mut self, completion_queue_size: u32) -> Self {
+        self.completion_queue_size = completion_queue_size;
+        self
+    }
+
+    pub fn build(self) -> Result<UMem, CamelliaError> {
+        if self.num_chunks.is_none() {
+            return Err(CamelliaError::InvalidArgument(
+                "number of chunks must be specified".to_string(),
+            ));
+        }
+
+        let xsk_config = xsk_umem_config {
+            frame_size: self.chunk_size,
+            frame_headroom: self.frame_headroom,
+            fill_size: self.fill_queue_size,
+            comp_size: self.completion_queue_size,
+            flags: 0,
+        };
+
+        UMem::new(self.chunk_size, self.num_chunks.unwrap(), xsk_config)
+    }
+}
+
 #[derive(Debug)]
 pub struct UMem {
     area: Arc<MMapArea>,
@@ -257,10 +322,10 @@ pub struct UMem {
 }
 
 impl UMem {
-    pub fn new(chunk_size: usize, chunks: usize) -> Result<Self, CamelliaError> {
+    fn new(chunk_size: u32, chunks: u32, config: xsk_umem_config) -> Result<Self, CamelliaError> {
         let mmap_size = chunk_size * chunks;
         let mut umem_inner: *mut xsk_umem = std::ptr::null_mut();
-        let area = Arc::new(MMapArea::new(chunk_size * chunks)?);
+        let area = Arc::new(MMapArea::new((chunk_size * chunks) as usize)?);
         let mut fill_queue = MaybeUninit::<FillQueue>::zeroed();
         let mut completion_queue = MaybeUninit::<CompletionQueue>::zeroed();
 
@@ -271,7 +336,7 @@ impl UMem {
                 mmap_size as u64,
                 &mut (*fill_queue.as_mut_ptr()).inner,
                 &mut (*completion_queue.as_mut_ptr()).inner,
-                std::ptr::null(),
+                &config,
             ))?;
         }
 
@@ -286,8 +351,8 @@ impl UMem {
         };
         for i in 0..chunks {
             umem.chunks.push(Chunk {
-                xdp_address: i * chunk_size,
-                size: chunk_size,
+                xdp_address: (i * chunk_size) as usize,
+                size: chunk_size as usize,
                 mmap_area: umem.area.clone(),
             });
         }
@@ -392,22 +457,21 @@ impl AsRawFd for UMem {
 
 #[cfg(test)]
 mod test {
-    use std::{
-        ffi::{CStr},
-        io::Write,
-    };
+    use std::{ffi::CStr, io::Write};
 
     use super::*;
 
     #[test]
     fn test_umem_create() {
-        let umem = UMem::new(2048, 1024).unwrap();
+        let umem = UMemBuilder::new().num_chunks(1024).build().unwrap();
         assert_eq!(umem.chunks.len(), 1024);
     }
 
     #[test]
     fn test_frame_allocate() {
-        let mut umem = Rc::new(RefCell::new(UMem::new(2048, 1024).unwrap()));
+        let mut umem = Rc::new(RefCell::new(
+            UMemBuilder::new().num_chunks(1024).build().unwrap(),
+        ));
         let umem_clone = umem.clone();
         let frames = UMem::allocate(&mut umem, 1024).unwrap();
         assert_eq!(frames.len(), 1024);
@@ -416,7 +480,9 @@ mod test {
 
     #[test]
     fn test_frame_write() {
-        let mut umem = Rc::new(RefCell::new(UMem::new(2048, 1024).unwrap()));
+        let mut umem = Rc::new(RefCell::new(
+            UMemBuilder::new().num_chunks(1024).build().unwrap(),
+        ));
         let mut frame = UMem::allocate(&mut umem, 1).unwrap().pop().unwrap();
         let mut buffer = frame.raw_buffer_append(1024).unwrap();
 
