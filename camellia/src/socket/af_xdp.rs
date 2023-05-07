@@ -105,7 +105,7 @@ impl XskSocket {
             };
 
             let chunk = self.umem.borrow_mut().extract_recv(addr);
-            frames[output_index] = RxFrame::from_chunk(chunk, addr as usize, len as usize);
+            frames[output_index] = RxFrame::from_chunk(chunk, self.umem.clone(), addr as usize, len as usize);
         }
 
         unsafe {
@@ -126,7 +126,10 @@ impl XskSocket {
         UMem::allocate(&mut self.umem, n)
     }
 
-    pub fn send<'a>(&mut self, frame: TxFrame<'a>) -> Result<Option<TxFrame<'a>>, CamelliaError> {
+    pub fn send<'a, T>(&mut self, frame: T) -> Result<Option<T>, CamelliaError>
+    where
+        T: Into<TxFrame>,
+    {
         let mut remaining = self.send_bulk([frame])?;
         assert!(remaining.len() <= 1);
 
@@ -137,10 +140,11 @@ impl XskSocket {
         }
     }
 
-    pub fn send_bulk<'a, T>(&mut self, frames: T) -> Result<Vec<TxFrame<'a>>, CamelliaError>
+    pub fn send_bulk<'a, Iter, T>(&mut self, frames: Iter) -> Result<Vec<T>, CamelliaError>
     where
-        T: IntoIterator<Item = TxFrame<'a>>,
-        T::IntoIter: ExactSizeIterator,
+        T: Into<TxFrame>,
+        Iter: IntoIterator<Item = T>,
+        Iter::IntoIter: ExactSizeIterator,
     {
         let mut start_index = 0;
         let mut remaining = Vec::new();
@@ -157,6 +161,7 @@ impl XskSocket {
 
         for (send_index, frame) in iter.enumerate() {
             if (send_index as u32) < actual_sent {
+                let frame = frame.into();
                 unsafe {
                     let tx_desc = xsk_ring_prod__tx_desc(
                         &mut self.tx.inner,
@@ -167,7 +172,7 @@ impl XskSocket {
                     (*tx_desc).options = 0;
                 };
 
-                self.umem.borrow_mut().register_send(frame.chunk())
+                self.umem.borrow_mut().register_send(frame)
             } else {
                 remaining.push(frame);
             }

@@ -66,58 +66,115 @@ impl Chunk {
     }
 }
 
-pub struct RxFrame<'a> {
-    _chunk: Chunk,
-    raw_buffer: &'a [u8],
-}
-
-pub struct TxFrame<'a> {
-    chunk: Chunk,
-    raw_buffer: &'a mut [u8],
-    len: usize,
-}
-
-pub struct AppFrame<'a> {
+pub struct Frame {
     chunk: Option<Chunk>,
-    raw_buffer: &'a mut [u8],
-    len: usize,
     umem: Rc<RefCell<UMem>>,
+    len: usize,
 }
 
-impl Drop for AppFrame<'_> {
+impl Drop for Frame {
     fn drop(&mut self) {
-        // panic if AppFrame still contains a chunk
+        // panic if RxFrame still contains a chunk
         if let Some(chunk) = self.chunk.take() {
             self.umem.borrow_mut().free(chunk);
         }
     }
 }
 
-impl<'a> AppFrame<'a> {
-    fn from_chunk(chunk: Chunk, umem: Rc<RefCell<UMem>>) -> Self {
+impl Frame {
+    pub fn raw_buffer(&self) -> &[u8] {
+        let chunk = self.chunk.as_ref().unwrap();
         let base_address = chunk.address();
-        let size = chunk.size;
-        AppFrame {
+        unsafe { std::slice::from_raw_parts(base_address as *const u8, self.len) }
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn xdp_address(&self) -> usize {
+        self.chunk.as_ref().unwrap().xdp_address()
+    }
+
+    pub fn raw_buffer_mut(&mut self) -> &mut [u8] {
+        let chunk = self.chunk.as_ref().unwrap();
+        let base_address = chunk.address();
+        unsafe { std::slice::from_raw_parts_mut(base_address as *mut u8, self.len) }
+    }
+
+    pub fn raw_buffer_resize(&mut self, size: usize) -> Result<&mut [u8], CamelliaError> {
+        let chunk = self.chunk.as_ref().unwrap();
+
+        if size > chunk.size {
+            return Err(CamelliaError::InvalidArgument(format!(
+                "request size {} is larger than chunk size {}",
+                size, chunk.size
+            )));
+        }
+        self.len = size;
+        let base_address = chunk.address();
+        Ok(unsafe { std::slice::from_raw_parts_mut(base_address as *mut u8, size) })
+    }
+
+    pub fn raw_buffer_append(&mut self, size: usize) -> Result<&mut [u8], CamelliaError> {
+        let chunk = self.chunk.as_ref().unwrap();
+        if self.len + size > chunk.size {
+            return Err(CamelliaError::InvalidArgument(format!(
+                "request size {} is larger than available size (total: {}, used: {})",
+                size, chunk.size, self.len
+            )));
+        }
+        let base_address = chunk.address() + self.len;
+        self.len += size;
+        Ok(unsafe { std::slice::from_raw_parts_mut(base_address as *mut u8, size) })
+    }
+
+    pub fn take_chunk(mut self) -> Chunk {
+        self.chunk.take().unwrap()
+    }
+}
+
+pub struct RxFrame(Frame);
+pub struct TxFrame(Frame);
+pub struct AppFrame(Frame);
+
+impl AppFrame {
+    fn from_chunk(chunk: Chunk, umem: Rc<RefCell<UMem>>) -> Self {
+        AppFrame(Frame {
             chunk: Some(chunk),
-            raw_buffer: unsafe { std::slice::from_raw_parts_mut(base_address as *mut u8, size) },
             len: 0,
             umem,
-        }
+        })
     }
 
-    pub fn raw_buffer(&mut self) -> &mut [u8] {
-        self.raw_buffer
+    pub fn raw_buffer(&self) -> &[u8] {
+        self.0.raw_buffer()
+    }
+
+    pub fn raw_buffer_mut(&mut self) -> &mut [u8] {
+        self.0.raw_buffer_mut()
+    }
+
+    pub fn raw_buffer_resize(&mut self, size: usize) -> Result<&mut [u8], CamelliaError> {
+        self.0.raw_buffer_resize(size)
+    }
+
+    pub fn raw_buffer_append(&mut self, size: usize) -> Result<&mut [u8], CamelliaError> {
+        self.0.raw_buffer_append(size)
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
     }
 }
 
-pub enum Frame<'a> {
-    Rx(RxFrame<'a>),
-    Tx(TxFrame<'a>),
-    App(AppFrame<'a>),
-}
-
-impl<'a> RxFrame<'a> {
-    pub fn from_chunk(chunk: Chunk, xdp_addr: usize, xdp_len: usize) -> Self {
+impl RxFrame {
+    pub fn from_chunk(
+        chunk: Chunk,
+        umem: Rc<RefCell<UMem>>,
+        xdp_addr: usize,
+        xdp_len: usize,
+    ) -> Self {
         if !chunk.is_xdp_array_valid(xdp_addr, xdp_len) {
             panic!(
                 "{}",
@@ -128,81 +185,53 @@ impl<'a> RxFrame<'a> {
             )
         }
 
-        let array_address = chunk.xdp_to_addr(xdp_addr);
-        RxFrame {
-            _chunk: chunk,
-            raw_buffer: unsafe { std::slice::from_raw_parts(array_address as *const u8, xdp_len) },
-        }
+        assert!(xdp_addr == chunk.xdp_address());
+
+        RxFrame(Frame {
+            chunk: Some(chunk),
+            umem,
+            len: xdp_len,
+        })
     }
 
     pub fn raw_buffer(&self) -> &[u8] {
-        self.raw_buffer
+        self.0.raw_buffer()
     }
 }
 
-impl<'a> TxFrame<'a> {
-    pub fn from_chunk(chunk: Chunk) -> Self {
-        let base_address = chunk.address();
-        let size = chunk.size;
-        TxFrame {
-            chunk,
-            raw_buffer: unsafe { std::slice::from_raw_parts_mut(base_address as *mut u8, size) },
+impl TxFrame {
+    pub fn from_chunk(chunk: Chunk, umem: Rc<RefCell<UMem>>) -> Self {
+        TxFrame(Frame {
+            chunk: Some(chunk),
+            umem,
             len: 0,
-        }
-    }
-
-    pub fn append_buffer(&'a mut self, size: usize) -> Result<&'a mut [u8], CamelliaError> {
-        if (self.len + size) > self.chunk.size {
-            return Err(CamelliaError::InvalidArgument(format!(
-                "buffer size is exhausted, request: {}, total: {}, allocated: {}",
-                size, self.chunk.size, self.len
-            )));
-        }
-        let raw_buffer = &mut self.raw_buffer[self.len..self.len + size];
-        self.len += size;
-        Ok(raw_buffer)
+        })
     }
 
     pub fn xdp_address(&self) -> usize {
-        self.chunk.xdp_address()
+        self.0.xdp_address()
     }
 
     pub fn len(&self) -> usize {
-        self.len
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len == 0
-    }
-
-    pub fn chunk(self) -> Chunk {
-        self.chunk
+        self.0.len()
     }
 }
 
-impl<'a> From<AppFrame<'a>> for TxFrame<'a> {
-    fn from(mut app_frame: AppFrame) -> Self {
-        let chunk = app_frame.chunk.take().unwrap();
-        let base_address = chunk.address();
-        let len = app_frame.len;
-        TxFrame {
-            chunk,
-            raw_buffer: unsafe { std::slice::from_raw_parts_mut(base_address as *mut u8, len) },
-            len,
-        }
+impl From<AppFrame> for TxFrame {
+    fn from(app_frame: AppFrame) -> Self {
+        TxFrame(app_frame.0)
     }
 }
 
-impl<'a> From<RxFrame<'a>> for TxFrame<'a> {
-    fn from(value: RxFrame<'a>) -> Self {
-        let chunk = value._chunk;
-        let base_address: usize = chunk.address();
-        let len = value.raw_buffer.len();
-        TxFrame {
-            chunk,
-            raw_buffer: unsafe { std::slice::from_raw_parts_mut(base_address as *mut u8, len) },
-            len,
-        }
+impl From<RxFrame> for TxFrame {
+    fn from(rx_frame: RxFrame) -> Self {
+        TxFrame(rx_frame.0)
+    }
+}
+
+impl From<RxFrame> for AppFrame {
+    fn from(rx_frame: RxFrame) -> Self {
+        AppFrame(rx_frame.0)
     }
 }
 
@@ -341,8 +370,9 @@ impl UMem {
         self.filled_chunks.remove(&xdp_addr).unwrap()
     }
 
-    pub fn register_send(&mut self, chunk: Chunk) {
-        self.tx_chunks.insert(chunk.xdp_address() as u64, chunk);
+    pub fn register_send(&mut self, frame: TxFrame) {
+        self.tx_chunks
+            .insert(frame.xdp_address() as u64, frame.0.take_chunk());
     }
 }
 
@@ -362,6 +392,11 @@ impl AsRawFd for UMem {
 
 #[cfg(test)]
 mod test {
+    use std::{
+        ffi::{CStr},
+        io::Write,
+    };
+
     use super::*;
 
     #[test]
@@ -377,5 +412,24 @@ mod test {
         let frames = UMem::allocate(&mut umem, 1024).unwrap();
         assert_eq!(frames.len(), 1024);
         assert_eq!(umem_clone.borrow_mut().chunks.len(), 0);
+    }
+
+    #[test]
+    fn test_frame_write() {
+        let mut umem = Rc::new(RefCell::new(UMem::new(2048, 1024).unwrap()));
+        let mut frame = UMem::allocate(&mut umem, 1).unwrap().pop().unwrap();
+        let mut buffer = frame.raw_buffer_append(1024).unwrap();
+
+        assert_eq!(buffer.len(), 1024);
+
+        buffer.write(b"hello, world\0").unwrap();
+
+        let chunk = frame.0.chunk.as_ref().unwrap();
+        unsafe {
+            assert_eq!(
+                CStr::from_ptr(chunk.address() as *const i8),
+                CStr::from_bytes_with_nul_unchecked(b"hello, world\0")
+            );
+        }
     }
 }
