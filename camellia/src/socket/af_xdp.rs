@@ -5,8 +5,7 @@ use std::mem::MaybeUninit;
 use std::os::fd::AsRawFd;
 use std::rc::Rc;
 
-use libxdp_sys::xsk_ring_cons__peek;
-use libxdp_sys::xsk_ring_cons__release;
+use libbpf_rs::libbpf_sys;
 use libxdp_sys::xsk_ring_cons__rx_desc;
 use libxdp_sys::xsk_ring_prod__reserve;
 use libxdp_sys::xsk_ring_prod__submit;
@@ -15,7 +14,12 @@ use libxdp_sys::xsk_socket;
 use libxdp_sys::xsk_socket__create;
 use libxdp_sys::xsk_socket__delete;
 use libxdp_sys::xsk_socket__fd;
+use libxdp_sys::xsk_socket_config;
+use libxdp_sys::xsk_socket_config__bindgen_ty_1;
+use libxdp_sys::XSK_RING_CONS__DEFAULT_NUM_DESCS;
+use libxdp_sys::XSK_RING_PROD__DEFAULT_NUM_DESCS;
 use libxdp_sys::{xsk_ring_cons, xsk_ring_prod};
+use libxdp_sys::{xsk_ring_cons__peek, xsk_ring_cons__release};
 use nix::errno::Errno;
 
 use crate::error::CamelliaError;
@@ -34,6 +38,151 @@ pub struct TxQueue {
 
 pub struct TxDescriptor {}
 
+pub enum XDPMode {
+    Generic,
+    Driver,
+    Hardware,
+}
+
+#[non_exhaustive]
+pub enum GenericUMem {
+    Dedicated(UMem),
+    // Shared(UMem),
+}
+
+pub struct XskSocketBuilder {
+    ifname: Option<String>,
+    queue_index: Option<u32>,
+    rx_queue_size: u32,
+    tx_queue_size: u32,
+    no_default_prog: bool,
+    zero_copy: bool,
+    cooperate_schedule: bool,
+    mode: XDPMode,
+    umem: Option<GenericUMem>,
+}
+
+impl XskSocketBuilder {
+    pub fn new() -> Self {
+        Self {
+            ifname: None,
+            queue_index: None,
+            rx_queue_size: XSK_RING_CONS__DEFAULT_NUM_DESCS,
+            tx_queue_size: XSK_RING_PROD__DEFAULT_NUM_DESCS,
+            mode: XDPMode::Driver,
+            umem: None,
+            no_default_prog: false,
+            zero_copy: false,
+            cooperate_schedule: false,
+        }
+    }
+
+    pub fn build(self) -> Result<XskSocket, CamelliaError> {
+        if self.umem.is_none() {
+            return Err(CamelliaError::InvalidArgument(
+                "UMem is not set".to_string(),
+            ));
+        }
+
+        if self.ifname.is_none() {
+            return Err(CamelliaError::InvalidArgument(
+                "Interface name is not set".to_string(),
+            ));
+        }
+
+        if self.queue_index.is_none() {
+            return Err(CamelliaError::InvalidArgument(
+                "Queue index is not set".to_string(),
+            ));
+        }
+
+        let libxdp_flags = if self.no_default_prog {
+            libxdp_sys::XSK_LIBXDP_FLAGS__INHIBIT_PROG_LOAD
+        } else {
+            0
+        };
+
+        let xdp_flags = match self.mode {
+            XDPMode::Generic => libbpf_sys::XDP_FLAGS_SKB_MODE,
+            XDPMode::Driver => libbpf_sys::XDP_FLAGS_DRV_MODE,
+            XDPMode::Hardware => libbpf_sys::XDP_FLAGS_HW_MODE,
+        };
+
+        let bind_flags = match self.umem.as_ref().unwrap() {
+            GenericUMem::Dedicated(_) => 0,
+            _ => libxdp_sys::XDP_SHARED_UMEM,
+        } | match self.zero_copy {
+            true => libxdp_sys::XDP_ZEROCOPY,
+            false => 0,
+        } | match self.cooperate_schedule {
+            true => libxdp_sys::XDP_USE_NEED_WAKEUP,
+            false => 0,
+        };
+
+        let config = xsk_socket_config {
+            rx_size: self.rx_queue_size,
+            tx_size: self.tx_queue_size,
+            __bindgen_anon_1: xsk_socket_config__bindgen_ty_1 {
+                libxdp_flags: libxdp_flags,
+            },
+            bind_flags: bind_flags as u16,
+            xdp_flags: xdp_flags,
+        };
+
+        XskSocket::new(
+            &self.ifname.unwrap(),
+            self.queue_index.unwrap(),
+            self.umem.unwrap(),
+            config,
+        )
+    }
+
+    pub fn ifname(&mut self, ifname: &str) -> &mut Self {
+        self.ifname = Some(ifname.to_string());
+        self
+    }
+
+    pub fn queue_index(&mut self, queue_index: u32) -> &mut Self {
+        self.queue_index = Some(queue_index);
+        self
+    }
+
+    pub fn rx_queue_size(&mut self, rx_queue_size: u32) -> &mut Self {
+        self.rx_queue_size = rx_queue_size;
+        self
+    }
+
+    pub fn tx_queue_size(&mut self, tx_queue_size: u32) -> &mut Self {
+        self.tx_queue_size = tx_queue_size;
+        self
+    }
+
+    pub fn no_default_prog(&mut self) -> &mut Self {
+        self.no_default_prog = true;
+        self
+    }
+
+    pub fn xdp_mode(&mut self, mode: XDPMode) -> &mut Self {
+        self.mode = mode;
+        self
+    }
+
+    pub fn enable_zero_copy(&mut self) -> &mut Self {
+        self.zero_copy = true;
+        self
+    }
+
+    pub fn enable_cooperate_schedule(&mut self) -> &mut Self {
+        self.cooperate_schedule = true;
+        self
+    }
+
+    pub fn with_dedicated_umem(&mut self, umem: UMem) -> &mut Self {
+        self.umem = Some(GenericUMem::Dedicated(umem));
+        self
+    }
+}
+
 pub struct XskSocket {
     inner: *mut xsk_socket,
     umem: Rc<RefCell<UMem>>,
@@ -45,11 +194,21 @@ impl XskSocket {
     pub fn new(
         ifname: &str,
         queue_index: u32,
-        umem: Rc<RefCell<UMem>>,
+        umem: GenericUMem,
+        config: xsk_socket_config,
     ) -> Result<Self, CamelliaError> {
         let mut raw_socket: *mut xsk_socket = std::ptr::null_mut();
         let mut rx_queue = MaybeUninit::<RxQueue>::zeroed();
         let mut tx_queue = MaybeUninit::<TxQueue>::zeroed();
+
+        let umem = match umem {
+            GenericUMem::Dedicated(umem) => Rc::new(RefCell::new(umem)),
+            _ => {
+                return Err(CamelliaError::InvalidArgument(
+                    "Only dedicated UMEM is supported".to_string(),
+                ))
+            }
+        };
 
         let ifname = CString::new(ifname).unwrap();
         unsafe {
@@ -60,7 +219,7 @@ impl XskSocket {
                 umem.borrow_mut().inner(),
                 &mut (*rx_queue.as_mut_ptr()).inner,
                 &mut (*tx_queue.as_mut_ptr()).inner,
-                std::ptr::null(),
+                &config,
             ))?;
         }
 
@@ -85,16 +244,17 @@ impl XskSocket {
 
         assert!((received as usize) <= size);
 
-        let frames = (0..received as usize).map(|i| {
-            let (addr, len) = unsafe {
-                let rx_desp =
-                    xsk_ring_cons__rx_desc(&self.rx.inner, start_index + i as u32);
-                ((*rx_desp).addr, (*rx_desp).len)
-            };
+        let frames = (0..received as usize)
+            .map(|i| {
+                let (addr, len) = unsafe {
+                    let rx_desp = xsk_ring_cons__rx_desc(&self.rx.inner, start_index + i as u32);
+                    ((*rx_desp).addr, (*rx_desp).len)
+                };
 
-            let chunk = self.umem.borrow_mut().extract_recv(addr);
-            RxFrame::from_chunk(chunk, self.umem.clone(), addr as usize, len as usize)
-        }).collect();
+                let chunk = self.umem.borrow_mut().extract_recv(addr);
+                RxFrame::from_chunk(chunk, self.umem.clone(), addr as usize, len as usize)
+            })
+            .collect();
 
         unsafe {
             xsk_ring_cons__release(&mut self.rx.inner, received);
