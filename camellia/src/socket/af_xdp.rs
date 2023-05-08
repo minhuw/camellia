@@ -6,6 +6,7 @@ use std::os::fd::AsRawFd;
 use std::rc::Rc;
 
 use libbpf_rs::libbpf_sys;
+use libc::c_void;
 use libxdp_sys::xsk_ring_cons__rx_desc;
 use libxdp_sys::xsk_ring_prod__reserve;
 use libxdp_sys::xsk_ring_prod__submit;
@@ -47,7 +48,7 @@ pub enum XDPMode {
 #[non_exhaustive]
 pub enum GenericUMem {
     Dedicated(UMem),
-    // Shared(UMem),
+    Shared(UMem),
 }
 
 pub struct XskSocketBuilder {
@@ -60,6 +61,12 @@ pub struct XskSocketBuilder {
     cooperate_schedule: bool,
     mode: XDPMode,
     umem: Option<GenericUMem>,
+}
+
+impl Default for XskSocketBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl XskSocketBuilder {
@@ -122,11 +129,9 @@ impl XskSocketBuilder {
         let config = xsk_socket_config {
             rx_size: self.rx_queue_size,
             tx_size: self.tx_queue_size,
-            __bindgen_anon_1: xsk_socket_config__bindgen_ty_1 {
-                libxdp_flags: libxdp_flags,
-            },
+            __bindgen_anon_1: xsk_socket_config__bindgen_ty_1 { libxdp_flags },
             bind_flags: bind_flags as u16,
-            xdp_flags: xdp_flags,
+            xdp_flags,
         };
 
         XskSocket::new(
@@ -137,47 +142,47 @@ impl XskSocketBuilder {
         )
     }
 
-    pub fn ifname(&mut self, ifname: &str) -> &mut Self {
+    pub fn ifname(mut self, ifname: &str) -> Self {
         self.ifname = Some(ifname.to_string());
         self
     }
 
-    pub fn queue_index(&mut self, queue_index: u32) -> &mut Self {
+    pub fn queue_index(mut self, queue_index: u32) -> Self {
         self.queue_index = Some(queue_index);
         self
     }
 
-    pub fn rx_queue_size(&mut self, rx_queue_size: u32) -> &mut Self {
+    pub fn rx_queue_size(mut self, rx_queue_size: u32) -> Self {
         self.rx_queue_size = rx_queue_size;
         self
     }
 
-    pub fn tx_queue_size(&mut self, tx_queue_size: u32) -> &mut Self {
+    pub fn tx_queue_size(mut self, tx_queue_size: u32) -> Self {
         self.tx_queue_size = tx_queue_size;
         self
     }
 
-    pub fn no_default_prog(&mut self) -> &mut Self {
+    pub fn no_default_prog(mut self) -> Self {
         self.no_default_prog = true;
         self
     }
 
-    pub fn xdp_mode(&mut self, mode: XDPMode) -> &mut Self {
+    pub fn xdp_mode(mut self, mode: XDPMode) -> Self {
         self.mode = mode;
         self
     }
 
-    pub fn enable_zero_copy(&mut self) -> &mut Self {
+    pub fn enable_zero_copy(mut self) -> Self {
         self.zero_copy = true;
         self
     }
 
-    pub fn enable_cooperate_schedule(&mut self) -> &mut Self {
+    pub fn enable_cooperate_schedule(mut self) -> Self {
         self.cooperate_schedule = true;
         self
     }
 
-    pub fn with_dedicated_umem(&mut self, umem: UMem) -> &mut Self {
+    pub fn with_dedicated_umem(mut self, umem: UMem) -> Self {
         self.umem = Some(GenericUMem::Dedicated(umem));
         self
     }
@@ -211,8 +216,14 @@ impl XskSocket {
         };
 
         let ifname = CString::new(ifname).unwrap();
+        log::info!(
+            "create AF_XDP socket on device {:?} (queue {})",
+            ifname,
+            queue_index
+        );
+
         unsafe {
-            Errno::result(xsk_socket__create(
+            match xsk_socket__create(
                 &mut raw_socket,
                 ifname.as_ptr(),
                 queue_index,
@@ -220,7 +231,12 @@ impl XskSocket {
                 &mut (*rx_queue.as_mut_ptr()).inner,
                 &mut (*tx_queue.as_mut_ptr()).inner,
                 &config,
-            ))?;
+            ) {
+                0 => {}
+                errno => {
+                    return Err(Errno::from_i32(-errno).into());
+                }
+            }
         }
 
         Ok(XskSocket {
@@ -274,7 +290,7 @@ impl XskSocket {
         UMem::allocate(&mut self.umem, n)
     }
 
-    pub fn send<'a, T>(&mut self, frame: T) -> Result<Option<T>, CamelliaError>
+    pub fn send<T>(&mut self, frame: T) -> Result<Option<T>, CamelliaError>
     where
         T: Into<TxFrame>,
     {
@@ -288,7 +304,7 @@ impl XskSocket {
         }
     }
 
-    pub fn send_bulk<'a, Iter, T>(&mut self, frames: Iter) -> Result<Vec<T>, CamelliaError>
+    pub fn send_bulk<Iter, T>(&mut self, frames: Iter) -> Result<Vec<T>, CamelliaError>
     where
         T: Into<TxFrame>,
         Iter: IntoIterator<Item = T>,

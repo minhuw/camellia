@@ -94,6 +94,10 @@ impl Frame {
         self.len
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
     pub fn xdp_address(&self) -> usize {
         self.chunk.as_ref().unwrap().xdp_address()
     }
@@ -168,6 +172,10 @@ impl AppFrame {
     pub fn len(&self) -> usize {
         self.0.len()
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
 }
 
 impl RxFrame {
@@ -217,6 +225,10 @@ impl TxFrame {
     pub fn len(&self) -> usize {
         self.0.len()
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
 }
 
 impl From<AppFrame> for TxFrame {
@@ -253,6 +265,12 @@ pub struct UMemBuilder {
     frame_headroom: u32,
     fill_queue_size: u32,
     completion_queue_size: u32,
+}
+
+impl Default for UMemBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl UMemBuilder {
@@ -329,15 +347,28 @@ impl UMem {
         let mut fill_queue = MaybeUninit::<FillQueue>::zeroed();
         let mut completion_queue = MaybeUninit::<CompletionQueue>::zeroed();
 
+        log::info!(
+            "allocate {} chunk with size {} (total: {}) on address {:x}",
+            chunks,
+            chunk_size,
+            mmap_size,
+            area.base_address()
+        );
+
         unsafe {
-            Errno::result(xsk_umem__create(
+            match xsk_umem__create(
                 &mut umem_inner,
                 area.base_address() as *mut c_void,
                 mmap_size as u64,
                 &mut (*fill_queue.as_mut_ptr()).inner,
                 &mut (*completion_queue.as_mut_ptr()).inner,
                 &config,
-            ))?;
+            ) {
+                0 => {}
+                errno => {
+                    return Err(Errno::from_i32(-errno).into())
+                }
+            }
         }
 
         let mut umem = UMem {
@@ -347,7 +378,7 @@ impl UMem {
             completion: unsafe { completion_queue.assume_init() },
             filled_chunks: HashMap::new(),
             tx_chunks: HashMap::new(),
-            inner: std::ptr::null_mut(),
+            inner: umem_inner
         };
         for i in 0..chunks {
             umem.chunks.push(Chunk {
@@ -443,8 +474,9 @@ impl UMem {
 
 impl Drop for UMem {
     fn drop(&mut self) {
-        if let Err(e) = unsafe { Errno::result(xsk_umem__delete(self.inner)) } {
-            eprintln!("failed to delete xsk umem: {}", e);
+        let errno = unsafe { xsk_umem__delete(self.inner) };
+        if  errno < 0 {
+            eprintln!("failed to delete xsk umem: {}", Errno::from_i32(-errno));
         }
     }
 }
