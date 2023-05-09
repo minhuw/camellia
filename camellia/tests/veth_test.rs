@@ -15,14 +15,20 @@ fn test_veth_setup() {
             .ip_addr(IpAddr::V4(Ipv4Addr::new(192, 168, 11, 1)), 24);
 
         let _veth_pair = right_device.build(left_device).unwrap();
-        let output = Command::new("ip").args(["link", "ls"]).output().expect("fail to run ip link ls");
+        let output = Command::new("ip")
+            .args(["link", "ls"])
+            .output()
+            .expect("fail to run ip link ls");
         let output = String::from_utf8_lossy(&output.stdout);
 
         assert!(output.contains("test-left@test-right"));
         assert!(output.contains("test-right@test-left"));
     }
 
-    let output = Command::new("ip").args(["link", "ls"]).output().expect("fail to run ip link ls");
+    let output = Command::new("ip")
+        .args(["link", "ls"])
+        .output()
+        .expect("fail to run ip link ls");
     let output = String::from_utf8_lossy(&output.stdout);
 
     assert!(!output.contains("test-left@test-right"));

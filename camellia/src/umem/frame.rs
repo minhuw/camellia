@@ -6,12 +6,12 @@ use std::os::fd::AsRawFd;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use libc::c_void;
+use libc::{c_void, recvfrom, MSG_DONTWAIT};
 use libxdp_sys::{
     xsk_ring_cons, xsk_ring_cons__comp_addr, xsk_ring_cons__peek, xsk_ring_cons__release,
-    xsk_ring_prod, xsk_ring_prod__fill_addr, xsk_ring_prod__reserve, xsk_ring_prod__submit,
-    xsk_umem, xsk_umem__create, xsk_umem__delete, xsk_umem__fd, xsk_umem_config,
-    XSK_RING_CONS__DEFAULT_NUM_DESCS, XSK_RING_PROD__DEFAULT_NUM_DESCS,
+    xsk_ring_prod, xsk_ring_prod__fill_addr, xsk_ring_prod__needs_wakeup, xsk_ring_prod__reserve,
+    xsk_ring_prod__submit, xsk_umem, xsk_umem__create, xsk_umem__delete, xsk_umem__fd,
+    xsk_umem_config, XSK_RING_CONS__DEFAULT_NUM_DESCS, XSK_RING_PROD__DEFAULT_NUM_DESCS,
     XSK_UMEM__DEFAULT_FRAME_HEADROOM, XSK_UMEM__DEFAULT_FRAME_SIZE,
 };
 use nix::errno::Errno;
@@ -207,6 +207,14 @@ impl RxFrame {
 
     pub fn raw_buffer(&self) -> &[u8] {
         self.0.raw_buffer()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
 }
 
@@ -412,6 +420,19 @@ impl UMem {
 
         unsafe {
             xsk_ring_prod__submit(&mut self.fill.inner, actual_filled as u32);
+        }
+
+        unsafe {
+            if xsk_ring_prod__needs_wakeup(&self.fill.inner) > 0 {
+                Errno::result(recvfrom(
+                    self.as_raw_fd(),
+                    std::ptr::null_mut(),
+                    0,
+                    MSG_DONTWAIT,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                ))?;
+            }
         }
 
         Ok(actual_filled)

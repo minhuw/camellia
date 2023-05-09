@@ -1,13 +1,18 @@
 use std::{
+    cmp::max,
     net::{IpAddr, Ipv4Addr},
-    time::Duration, cmp::max, process::Command, os::fd::AsRawFd,
+    os::fd::AsRawFd,
+    time::Duration,
 };
 
-use camellia::{socket::af_xdp::XskSocketBuilder, umem::frame::UMemBuilder};
-use common::VethDeviceBuilder;
+use camellia::{
+    socket::af_xdp::XskSocketBuilder,
+    umem::frame::{AppFrame, UMemBuilder},
+};
+use common::{VethDeviceBuilder, VethPair};
 use etherparse::PacketBuilder;
-use std::thread::sleep;
 use nix::poll::{self, PollFd};
+use std::thread::sleep;
 
 mod common;
 
@@ -23,8 +28,26 @@ fn setup_veth() -> common::VethPair {
     right_device.build(left_device).unwrap()
 }
 
+fn build_a_packet(veth_pair: &VethPair, mut frame: AppFrame) -> camellia::umem::frame::AppFrame {
+    let builder = PacketBuilder::ethernet2(
+        veth_pair.left.mac_addr.clone().bytes(),
+        veth_pair.right.mac_addr.clone().bytes(),
+    )
+    .ipv4([0, 0, 0, 0], [0, 0, 0, 0], 255);
+
+    let payload = "hello, world!".as_bytes();
+    let packet_size = builder.size(payload.len());
+
+    {
+        let mut buffer = frame.raw_buffer_append(max(packet_size, 64)).unwrap();
+        builder.write(&mut buffer, 0, payload).unwrap();
+    }
+
+    frame
+}
+
 #[test]
-fn test_packet_forward() {
+fn test_packet_io() {
     env_logger::init();
 
     let veth_pair = setup_veth();
@@ -50,29 +73,28 @@ fn test_packet_forward() {
 
     let mut frame = left_socket.allocate(1).unwrap().pop().unwrap();
 
-    let builder = PacketBuilder::ethernet2(
-        veth_pair.left.mac_addr.clone().bytes(),
-        veth_pair.right.mac_addr.clone().bytes(),
-    )
-    .ipv4([0, 0, 0, 0], [0, 0, 0, 0], 255);
+    frame = build_a_packet(&veth_pair, frame);
 
-    let payload = "hello, world!".as_bytes();
-    let packet_size = builder.size(payload.len());
-
-    {
-        let mut buffer = frame.raw_buffer_append(max(packet_size, 64)).unwrap();
-        builder.write(&mut buffer, 0, payload).unwrap();
-    }
-
+    let packet_size = frame.len();
     assert!(left_socket.send(frame).unwrap().is_none());
 
     sleep(Duration::from_millis(100));
 
-    let fd = PollFd::new(left_socket.as_raw_fd(), poll::PollFlags::POLLIN);
+    let bounced_frame = right_socket.recv().unwrap().unwrap();
+    assert_eq!(
+        bounced_frame.raw_buffer().len(),
+        max(packet_size, bounced_frame.len())
+    );
 
-    poll::poll(&mut [fd], 0).unwrap();
+    let mut frame = left_socket.allocate(1).unwrap().pop().unwrap();
+    frame = build_a_packet(&veth_pair, frame);
+    let packet_size = frame.len();
+    assert!(left_socket.send(frame).unwrap().is_none());
+    sleep(Duration::from_millis(100));
 
     let bounced_frame = right_socket.recv().unwrap().unwrap();
-
-    assert_eq!(bounced_frame.raw_buffer().len(), max(packet_size, 64));
+    assert_eq!(
+        bounced_frame.raw_buffer().len(),
+        max(packet_size, bounced_frame.len())
+    );
 }

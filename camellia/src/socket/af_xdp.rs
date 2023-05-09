@@ -6,7 +6,10 @@ use std::os::fd::AsRawFd;
 use std::rc::Rc;
 
 use libbpf_rs::libbpf_sys;
+use libc::sendto;
+use libc::MSG_DONTWAIT;
 use libxdp_sys::xsk_ring_cons__rx_desc;
+use libxdp_sys::xsk_ring_prod__needs_wakeup;
 use libxdp_sys::xsk_ring_prod__reserve;
 use libxdp_sys::xsk_ring_prod__submit;
 use libxdp_sys::xsk_ring_prod__tx_desc;
@@ -257,9 +260,10 @@ impl XskSocket {
 
     pub fn recv_bulk(&mut self, size: usize) -> Result<Vec<RxFrame>, CamelliaError> {
         let mut start_index = 0;
+
         let received: u32 =
             unsafe { xsk_ring_cons__peek(&mut self.rx.inner, size as u32, &mut start_index) };
-        
+
         assert!((received as usize) <= size);
 
         let frames = (0..received as usize)
@@ -345,8 +349,23 @@ impl XskSocket {
             }
         }
 
-        unsafe  {
+        unsafe {
             xsk_ring_prod__submit(&mut self.tx.inner, actual_sent);
+
+            // When cooperate schedule is disabled, we always need to wake up the TX queue
+            // https://lore.kernel.org/bpf/20201130185205.196029-5-bjorn.topel@gmail.com/
+            // But the wakeup flag is set even when XDP_USE_NEED_WAKEUP is not set, so we
+            // happlily always checks the XDP_RING_NEED_WAKEUP flag.
+            if xsk_ring_prod__needs_wakeup(&self.tx.inner) != 0 {
+                Errno::result(sendto(
+                    self.as_raw_fd(),
+                    std::ptr::null(),
+                    0,
+                    MSG_DONTWAIT,
+                    std::ptr::null(),
+                    0,
+                ))?;
+            }
         }
 
         Ok(remaining)

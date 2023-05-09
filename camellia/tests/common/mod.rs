@@ -1,7 +1,11 @@
-use std::{rc::{Rc, Weak}, process::Command, net::IpAddr};
 use anyhow::{anyhow, Result};
 use nix::net::if_::if_nametoindex;
 use once_cell::unsync::OnceCell;
+use std::{
+    net::IpAddr,
+    process::Command,
+    rc::{Rc, Weak},
+};
 
 pub struct VethPair {
     pub left: Rc<VethDevice>,
