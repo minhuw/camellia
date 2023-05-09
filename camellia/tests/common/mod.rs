@@ -45,6 +45,11 @@ impl VethPairBuilder {
         disable_checksum_offload(&left.name)?;
         disable_checksum_offload(&right.name)?;
 
+        set_num_rx_queues(&left.name, 1);
+        set_num_rx_queues(&right.name, 1);
+        set_num_tx_queues(&left.name, 1);
+        set_num_tx_queues(&right.name, 1);
+
         up_device(&left.name)?;
         up_device(&right.name)?;
 

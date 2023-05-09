@@ -8,9 +8,9 @@ use std::sync::Arc;
 
 use libc::c_void;
 use libxdp_sys::{
-    xsk_ring_cons, xsk_ring_cons__comp_addr, xsk_ring_cons__peek, xsk_ring_prod,
-    xsk_ring_prod__fill_addr, xsk_ring_prod__reserve, xsk_ring_prod__submit, xsk_umem,
-    xsk_umem__create, xsk_umem__delete, xsk_umem__fd, xsk_umem_config,
+    xsk_ring_cons, xsk_ring_cons__comp_addr, xsk_ring_cons__peek, xsk_ring_cons__release,
+    xsk_ring_prod, xsk_ring_prod__fill_addr, xsk_ring_prod__reserve, xsk_ring_prod__submit,
+    xsk_umem, xsk_umem__create, xsk_umem__delete, xsk_umem__fd, xsk_umem_config,
     XSK_RING_CONS__DEFAULT_NUM_DESCS, XSK_RING_PROD__DEFAULT_NUM_DESCS,
     XSK_UMEM__DEFAULT_FRAME_HEADROOM, XSK_UMEM__DEFAULT_FRAME_SIZE,
 };
@@ -71,6 +71,7 @@ impl Chunk {
 pub struct Frame {
     chunk: Option<Chunk>,
     umem: Rc<RefCell<UMem>>,
+    offset: usize,
     len: usize,
 }
 
@@ -86,7 +87,7 @@ impl Drop for Frame {
 impl Frame {
     pub fn raw_buffer(&self) -> &[u8] {
         let chunk = self.chunk.as_ref().unwrap();
-        let base_address = chunk.address();
+        let base_address = chunk.address() + self.offset;
         unsafe { std::slice::from_raw_parts(base_address as *const u8, self.len) }
     }
 
@@ -99,12 +100,12 @@ impl Frame {
     }
 
     pub fn xdp_address(&self) -> usize {
-        self.chunk.as_ref().unwrap().xdp_address()
+        self.chunk.as_ref().unwrap().xdp_address() + self.offset
     }
 
     pub fn raw_buffer_mut(&mut self) -> &mut [u8] {
         let chunk = self.chunk.as_ref().unwrap();
-        let base_address = chunk.address();
+        let base_address = chunk.address() + self.offset;
         unsafe { std::slice::from_raw_parts_mut(base_address as *mut u8, self.len) }
     }
 
@@ -148,6 +149,7 @@ impl AppFrame {
     fn from_chunk(chunk: Chunk, umem: Rc<RefCell<UMem>>) -> Self {
         AppFrame(Frame {
             chunk: Some(chunk),
+            offset: 0,
             len: 0,
             umem,
         })
@@ -195,9 +197,8 @@ impl RxFrame {
             )
         }
 
-        assert!(xdp_addr == chunk.xdp_address());
-
         RxFrame(Frame {
+            offset: xdp_addr - chunk.xdp_address(),
             chunk: Some(chunk),
             umem,
             len: xdp_len,
@@ -214,6 +215,7 @@ impl TxFrame {
         TxFrame(Frame {
             chunk: Some(chunk),
             umem,
+            offset: 0,
             len: 0,
         })
     }
@@ -336,24 +338,22 @@ pub struct UMem {
     tx_chunks: HashMap<u64, Chunk>,
     fill: FillQueue,
     completion: CompletionQueue,
+    chunk_size: u32,
+    _num_chunks: u32,
     inner: *mut xsk_umem,
 }
 
 impl UMem {
-    fn new(chunk_size: u32, chunks: u32, config: xsk_umem_config) -> Result<Self, CamelliaError> {
-        let mmap_size = chunk_size * chunks;
+    fn new(
+        chunk_size: u32,
+        num_chunks: u32,
+        config: xsk_umem_config,
+    ) -> Result<Self, CamelliaError> {
+        let mmap_size = chunk_size * num_chunks;
         let mut umem_inner: *mut xsk_umem = std::ptr::null_mut();
-        let area = Arc::new(MMapArea::new((chunk_size * chunks) as usize)?);
+        let area = Arc::new(MMapArea::new((chunk_size * num_chunks) as usize)?);
         let mut fill_queue = MaybeUninit::<FillQueue>::zeroed();
         let mut completion_queue = MaybeUninit::<CompletionQueue>::zeroed();
-
-        log::info!(
-            "allocate {} chunk with size {} (total: {}) on address {:x}",
-            chunks,
-            chunk_size,
-            mmap_size,
-            area.base_address()
-        );
 
         unsafe {
             match xsk_umem__create(
@@ -365,9 +365,7 @@ impl UMem {
                 &config,
             ) {
                 0 => {}
-                errno => {
-                    return Err(Errno::from_i32(-errno).into())
-                }
+                errno => return Err(Errno::from_i32(-errno).into()),
             }
         }
 
@@ -378,9 +376,11 @@ impl UMem {
             completion: unsafe { completion_queue.assume_init() },
             filled_chunks: HashMap::new(),
             tx_chunks: HashMap::new(),
-            inner: umem_inner
+            chunk_size,
+            _num_chunks: num_chunks,
+            inner: umem_inner,
         };
-        for i in 0..chunks {
+        for i in 0..num_chunks {
             umem.chunks.push(Chunk {
                 xdp_address: (i * chunk_size) as usize,
                 size: chunk_size as usize,
@@ -407,8 +407,7 @@ impl UMem {
                 *xsk_ring_prod__fill_addr(&mut self.fill.inner, start_index + fill_index as u32) =
                     chunk.xdp_address() as u64;
             }
-            start_index += 1;
-            self.filled_chunks.insert(chunk.address() as u64, chunk);
+            self.filled_chunks.insert(chunk.xdp_address() as u64, chunk);
         }
 
         unsafe {
@@ -459,11 +458,16 @@ impl UMem {
 
             self.chunks.push(self.tx_chunks.remove(&xdp_addr).unwrap());
         }
+        unsafe {
+            xsk_ring_cons__release(&mut self.completion.inner, completed);
+        }
     }
 
     pub fn extract_recv(&mut self, xdp_addr: u64) -> Chunk {
+        let base_address = xdp_addr - (xdp_addr % (self.chunk_size as u64));
         // The chunk must be filled before
-        self.filled_chunks.remove(&xdp_addr).unwrap()
+
+        self.filled_chunks.remove(&base_address).unwrap()
     }
 
     pub fn register_send(&mut self, frame: TxFrame) {
@@ -475,7 +479,7 @@ impl UMem {
 impl Drop for UMem {
     fn drop(&mut self) {
         let errno = unsafe { xsk_umem__delete(self.inner) };
-        if  errno < 0 {
+        if errno < 0 {
             eprintln!("failed to delete xsk umem: {}", Errno::from_i32(-errno));
         }
     }

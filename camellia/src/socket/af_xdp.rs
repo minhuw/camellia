@@ -6,7 +6,6 @@ use std::os::fd::AsRawFd;
 use std::rc::Rc;
 
 use libbpf_rs::libbpf_sys;
-use libc::c_void;
 use libxdp_sys::xsk_ring_cons__rx_desc;
 use libxdp_sys::xsk_ring_prod__reserve;
 use libxdp_sys::xsk_ring_prod__submit;
@@ -239,6 +238,9 @@ impl XskSocket {
             }
         }
 
+        // TODO: validate that the RX ring is fulfilled
+        umem.borrow_mut().fill(config.rx_size as usize).unwrap();
+
         Ok(XskSocket {
             inner: raw_socket,
             umem,
@@ -257,7 +259,7 @@ impl XskSocket {
         let mut start_index = 0;
         let received: u32 =
             unsafe { xsk_ring_cons__peek(&mut self.rx.inner, size as u32, &mut start_index) };
-
+        
         assert!((received as usize) <= size);
 
         let frames = (0..received as usize)
@@ -326,6 +328,7 @@ impl XskSocket {
         for (send_index, frame) in iter.enumerate() {
             if (send_index as u32) < actual_sent {
                 let frame = frame.into();
+
                 unsafe {
                     let tx_desc = xsk_ring_prod__tx_desc(
                         &mut self.tx.inner,
@@ -342,7 +345,7 @@ impl XskSocket {
             }
         }
 
-        unsafe {
+        unsafe  {
             xsk_ring_prod__submit(&mut self.tx.inner, actual_sent);
         }
 

@@ -22,7 +22,7 @@ impl MMapArea {
                 NonZeroUsize::new_unchecked(size),
                 ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
                 MapFlags::MAP_SHARED | MapFlags::MAP_ANONYMOUS,
-                0,
+                -1,
                 0,
             )?
         };

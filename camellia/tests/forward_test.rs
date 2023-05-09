@@ -1,7 +1,13 @@
-use std::net::{IpAddr, Ipv4Addr};
+use std::{
+    net::{IpAddr, Ipv4Addr},
+    time::Duration, cmp::max, process::Command, os::fd::AsRawFd,
+};
 
 use camellia::{socket::af_xdp::XskSocketBuilder, umem::frame::UMemBuilder};
 use common::VethDeviceBuilder;
+use etherparse::PacketBuilder;
+use std::thread::sleep;
+use nix::poll::{self, PollFd};
 
 mod common;
 
@@ -18,13 +24,13 @@ fn setup_veth() -> common::VethPair {
 }
 
 #[test]
-fn test_socket_create() {
+fn test_packet_forward() {
     env_logger::init();
 
-    let _veth_pair = setup_veth();
+    let veth_pair = setup_veth();
 
-    let umem_left = UMemBuilder::new().num_chunks(2048).build().unwrap();
-    let umem_right = UMemBuilder::new().num_chunks(1024).build().unwrap();
+    let umem_left = UMemBuilder::new().num_chunks(4096).build().unwrap();
+    let umem_right = UMemBuilder::new().num_chunks(4096).build().unwrap();
 
     log::info!("Creating socket");
 
@@ -42,6 +48,31 @@ fn test_socket_create() {
         .build()
         .unwrap();
 
-    assert!(left_socket.allocate(1).unwrap().len() == 1);
-    assert!(right_socket.allocate(1).unwrap().len() == 1);
+    let mut frame = left_socket.allocate(1).unwrap().pop().unwrap();
+
+    let builder = PacketBuilder::ethernet2(
+        veth_pair.left.mac_addr.clone().bytes(),
+        veth_pair.right.mac_addr.clone().bytes(),
+    )
+    .ipv4([0, 0, 0, 0], [0, 0, 0, 0], 255);
+
+    let payload = "hello, world!".as_bytes();
+    let packet_size = builder.size(payload.len());
+
+    {
+        let mut buffer = frame.raw_buffer_append(max(packet_size, 64)).unwrap();
+        builder.write(&mut buffer, 0, payload).unwrap();
+    }
+
+    assert!(left_socket.send(frame).unwrap().is_none());
+
+    sleep(Duration::from_millis(100));
+
+    let fd = PollFd::new(left_socket.as_raw_fd(), poll::PollFlags::POLLIN);
+
+    poll::poll(&mut [fd], 0).unwrap();
+
+    let bounced_frame = right_socket.recv().unwrap().unwrap();
+
+    assert_eq!(bounced_frame.raw_buffer().len(), max(packet_size, 64));
 }
