@@ -1,16 +1,16 @@
+use common::veth::VethDeviceBuilder;
 use std::net::{IpAddr, Ipv4Addr};
 use std::process::Command;
-
 mod common;
 
 #[test]
 fn test_veth_setup() {
     {
-        let left_device = common::VethDeviceBuilder::new("test-left")
+        let left_device = VethDeviceBuilder::new("test-left")
             .mac_addr([0x38, 0x7e, 0x58, 0xe7, 0x87, 0x2a].into())
             .ip_addr(IpAddr::V4(Ipv4Addr::new(192, 168, 11, 1)), 24);
 
-        let right_device = common::VethDeviceBuilder::new("test-right")
+        let right_device = VethDeviceBuilder::new("test-right")
             .mac_addr([0x38, 0x7e, 0x58, 0xe7, 0x87, 0x2b].into())
             .ip_addr(IpAddr::V4(Ipv4Addr::new(192, 168, 11, 1)), 24);
 

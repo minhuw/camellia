@@ -1,100 +1,299 @@
 use std::{
-    cmp::max,
     net::{IpAddr, Ipv4Addr},
     os::fd::AsRawFd,
+    process::Command,
+    sync::{atomic::AtomicBool, Arc},
     time::Duration,
 };
 
+use etherparse::Ethernet2Header;
+use nix::errno::Errno;
+use nix::poll::{poll, PollFd, PollFlags};
+
+use anyhow::Result;
 use camellia::{
     socket::af_xdp::XskSocketBuilder,
     umem::frame::{AppFrame, UMemBuilder},
 };
-use common::{VethDeviceBuilder, VethPair};
-use etherparse::PacketBuilder;
-use nix::poll::{self, PollFd};
-use std::thread::sleep;
+use common::{
+    netns::NetNs,
+    veth::{set_promiscuous, MacAddr, VethDeviceBuilder, VethPair},
+};
 
 mod common;
 
-fn setup_veth() -> common::VethPair {
-    let left_device = VethDeviceBuilder::new("test-left")
+fn setup_veth() -> Result<(VethPair, VethPair)> {
+    let client_netns = NetNs::new("client-ns").unwrap();
+    let server_netns = NetNs::new("server-ns").unwrap();
+    let forward_netns = NetNs::new("forward-ns").unwrap();
+
+    let client_device = VethDeviceBuilder::new("test-left")
         .mac_addr([0x38, 0x7e, 0x58, 0xe7, 0x87, 0x2a].into())
-        .ip_addr(IpAddr::V4(Ipv4Addr::new(192, 168, 11, 1)), 24);
+        .ip_addr(IpAddr::V4(Ipv4Addr::new(192, 168, 11, 1)), 24)
+        .namespace(client_netns.clone());
 
-    let right_device = VethDeviceBuilder::new("test-right")
+    let left_device = VethDeviceBuilder::new("forward-left")
         .mac_addr([0x38, 0x7e, 0x58, 0xe7, 0x87, 0x2b].into())
-        .ip_addr(IpAddr::V4(Ipv4Addr::new(192, 168, 11, 1)), 24);
+        .ip_addr(IpAddr::V4(Ipv4Addr::new(192, 168, 11, 2)), 24)
+        .namespace(forward_netns.clone());
 
-    right_device.build(left_device).unwrap()
-}
+    let right_device = VethDeviceBuilder::new("forward-right")
+        .mac_addr([0x38, 0x7e, 0x58, 0xe7, 0x87, 0x2c].into())
+        .ip_addr(IpAddr::V4(Ipv4Addr::new(192, 168, 12, 2)), 24)
+        .namespace(forward_netns);
 
-fn build_a_packet(veth_pair: &VethPair, mut frame: AppFrame) -> camellia::umem::frame::AppFrame {
-    let builder = PacketBuilder::ethernet2(
-        veth_pair.left.mac_addr.clone().bytes(),
-        veth_pair.right.mac_addr.clone().bytes(),
-    )
-    .ipv4([0, 0, 0, 0], [0, 0, 0, 0], 255);
+    let server_device = VethDeviceBuilder::new("test-right")
+        .mac_addr([0x38, 0x7e, 0x58, 0xe7, 0x87, 0x2d].into())
+        .ip_addr(IpAddr::V4(Ipv4Addr::new(192, 168, 12, 1)), 24)
+        .namespace(server_netns.clone());
 
-    let payload = "hello, world!".as_bytes();
-    let packet_size = builder.size(payload.len());
+    let left_pair = client_device.build(left_device).unwrap();
+    let right_pair = right_device.build(server_device).unwrap();
 
     {
-        let mut buffer = frame.raw_buffer_append(max(packet_size, 64)).unwrap();
-        builder.write(&mut buffer, 0, payload).unwrap();
+        let _guard = client_netns.enter().unwrap();
+        println!("client-ns namespace:");
+        display_interface();
+
+        // Set the default route of left and right namespaces
+        let mut client_exec_handle = std::process::Command::new("ip")
+            .args(["route", "add", "default", "via", "192.168.11.1"])
+            .spawn()
+            .unwrap();
+
+        client_exec_handle.wait().unwrap();
     }
+
+    {
+        let _guard = server_netns.enter().unwrap();
+        println!("server-ns namespace:");
+        display_interface();
+        // Set the default route of left and right namespaces
+        let mut right_exec_handle = std::process::Command::new("ip")
+            .args(["route", "add", "default", "via", "192.168.12.1"])
+            .spawn()
+            .unwrap();
+
+        right_exec_handle.wait().unwrap();
+    }
+
+    Ok((left_pair, right_pair))
+}
+
+fn display_interface() {
+    let mut child = Command::new("ip").args(["addr", "ls"]).spawn().unwrap();
+    child.wait().unwrap();
+}
+
+macro_rules! loop_while_eintr {
+    ($poll_expr: expr) => {
+        loop {
+            match $poll_expr {
+                Ok(nfds) => break nfds,
+                Err(Errno::EINTR) => (),
+                Err(e) => panic!("{}", e),
+            }
+        }
+    };
+}
+
+fn set_mac(frame: AppFrame, source_mac: MacAddr) -> AppFrame {
+    let mut frame = frame;
+    let (mut ether_header, _remain) = Ethernet2Header::from_slice(frame.raw_buffer()).unwrap();
+
+    ether_header.source = source_mac.bytes();
+    ether_header.write_to_slice(frame.raw_buffer_mut()).unwrap();
 
     frame
 }
 
 #[test]
-fn test_packet_io() {
+#[ignore]
+fn test_packet_forward() {
     env_logger::init();
 
-    let veth_pair = setup_veth();
+    let veth_pair = setup_veth().unwrap();
 
-    let umem_left = UMemBuilder::new().num_chunks(4096).build().unwrap();
-    let umem_right = UMemBuilder::new().num_chunks(4096).build().unwrap();
+    {
+        let _left_ns_guard = veth_pair.0.left.namespace.enter().unwrap();
+        set_promiscuous(veth_pair.0.right.name.as_str());
+        set_promiscuous(veth_pair.1.left.name.as_str());
+    }
 
-    log::info!("Creating socket");
+    let running = Arc::new(AtomicBool::new(true));
+    let ready = Arc::new(AtomicBool::new(false));
+    let running_clone = running.clone();
+    let running_second_clone = running.clone();
 
-    let mut left_socket = XskSocketBuilder::new()
-        .ifname("test-left")
-        .queue_index(0)
-        .with_dedicated_umem(umem_left)
-        .build()
-        .unwrap();
+    let ready_clone = ready.clone();
 
-    let mut right_socket = XskSocketBuilder::new()
-        .ifname("test-right")
-        .queue_index(0)
-        .with_dedicated_umem(umem_right)
-        .build()
-        .unwrap();
+    ctrlc::set_handler(move || {
+        running_clone.store(false, std::sync::atomic::Ordering::SeqCst);
+    })
+    .unwrap();
 
-    let mut frame = left_socket.allocate(1).unwrap().pop().unwrap();
+    let forward_namespace = veth_pair.0.right.namespace.clone();
+    let forward_namespace_clone = forward_namespace.clone();
 
-    frame = build_a_packet(&veth_pair, frame);
+    let broadcase_address = MacAddr::new([0xff, 0xff, 0xff, 0xff, 0xff, 0xff]);
+    let mac_address_client = veth_pair.0.left.mac_addr.clone();
+    let mac_address_server = veth_pair.1.right.mac_addr.clone();
 
-    let packet_size = frame.len();
-    assert!(left_socket.send(frame).unwrap().is_none());
+    let mac_address_left = veth_pair.0.right.mac_addr.clone();
+    let mac_address_right = veth_pair.1.left.mac_addr.clone();
 
-    sleep(Duration::from_millis(100));
+    let handle = std::thread::spawn(move || {
+        let _guard = forward_namespace_clone.enter().unwrap();
 
-    let bounced_frame = right_socket.recv().unwrap().unwrap();
-    assert_eq!(
-        bounced_frame.raw_buffer().len(),
-        max(packet_size, bounced_frame.len())
-    );
+        display_interface();
 
-    let mut frame = left_socket.allocate(1).unwrap().pop().unwrap();
-    frame = build_a_packet(&veth_pair, frame);
-    let packet_size = frame.len();
-    assert!(left_socket.send(frame).unwrap().is_none());
-    sleep(Duration::from_millis(100));
+        let umem_left = UMemBuilder::new().num_chunks(4096).build().unwrap();
+        let umem_right = UMemBuilder::new().num_chunks(4096).build().unwrap();
 
-    let bounced_frame = right_socket.recv().unwrap().unwrap();
-    assert_eq!(
-        bounced_frame.raw_buffer().len(),
-        max(packet_size, bounced_frame.len())
-    );
+        let mut left_socket = XskSocketBuilder::new()
+            .ifname("forward-left")
+            .queue_index(0)
+            .with_dedicated_umem(umem_left)
+            .build()
+            .unwrap();
+
+        let mut right_socket = XskSocketBuilder::new()
+            .ifname("forward-right")
+            .queue_index(0)
+            .with_dedicated_umem(umem_right)
+            .build()
+            .unwrap();
+
+        ready_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+
+        while running.load(std::sync::atomic::Ordering::SeqCst) {
+            let mut pollfds = [
+                PollFd::new(
+                    left_socket.as_raw_fd(),
+                    PollFlags::POLLIN | PollFlags::POLLERR,
+                ),
+                PollFd::new(
+                    right_socket.as_raw_fd(),
+                    PollFlags::POLLIN | PollFlags::POLLERR,
+                ),
+            ];
+
+            let num_events =
+                Errno::result(loop_while_eintr!(poll(&mut pollfds, -1))).unwrap() as usize;
+
+            for i in 0..num_events {
+                if pollfds[i].revents().unwrap().contains(PollFlags::POLLERR) {
+                    panic!("POLLERR")
+                }
+                if pollfds[i].revents().unwrap().contains(PollFlags::POLLIN) {
+                    if pollfds[i].as_raw_fd() == left_socket.as_raw_fd() {
+                        let frames = left_socket.recv_bulk(32).unwrap();
+                        println!("receive {} frames from left socket", frames.len());
+
+                        let frames: Vec<_> = frames
+                            .into_iter()
+                            .map(|frame| {
+                                let (ether_header, _remaining) =
+                                    etherparse::Ethernet2Header::from_slice(frame.raw_buffer())
+                                        .unwrap();
+
+                                if ether_header.destination == mac_address_server.bytes()
+                                    || ether_header.destination == broadcase_address.bytes()
+                                {
+                                    println!("ether header: {:?}", ether_header);
+                                    let frame = set_mac(frame.into(), mac_address_right);
+                                    let (ether_header, _remaining) =
+                                        etherparse::Ethernet2Header::from_slice(frame.raw_buffer())
+                                            .unwrap();
+                                    println!(
+                                        "after modification, ether header: {:?}",
+                                        ether_header
+                                    );
+                                    Some(frame)
+                                } else {
+                                    None
+                                }
+                            })
+                            .flatten()
+                            .collect();
+
+                        let remaining = right_socket.send_bulk(frames).unwrap();
+                        assert_eq!(remaining.len(), 0);
+                    } else if pollfds[i].as_raw_fd() == right_socket.as_raw_fd() {
+                        let frames = right_socket.recv_bulk(32).unwrap();
+                        println!("receive {} frames from right socket", frames.len());
+
+                        let frames: Vec<_> = frames
+                            .into_iter()
+                            .map(|frame| {
+                                let (ether_header, _remaining) =
+                                    etherparse::Ethernet2Header::from_slice(frame.raw_buffer())
+                                        .unwrap();
+                                println!("ether header: {:?}", ether_header);
+
+                                if ether_header.destination == mac_address_client.bytes()
+                                    || ether_header.destination == broadcase_address.bytes()
+                                {
+                                    let frame = set_mac(frame.into(), mac_address_left);
+                                    let (ether_header, _remaining) =
+                                        etherparse::Ethernet2Header::from_slice(frame.raw_buffer())
+                                            .unwrap();
+                                    println!(
+                                        "after modification, ether header: {:?}",
+                                        ether_header
+                                    );
+                                    Some(frame)
+                                } else {
+                                    None
+                                }
+                            })
+                            .flatten()
+                            .collect();
+
+                        let remaining = left_socket.send_bulk(frames).unwrap();
+                        assert_eq!(remaining.len(), 0);
+                    } else {
+                        unreachable!()
+                    }
+                }
+            }
+        }
+    });
+
+    let watch_handle = std::thread::spawn(move || {
+        while running_second_clone.load(std::sync::atomic::Ordering::SeqCst) {
+            let _guard = forward_namespace.enter().unwrap();
+
+            let output = Command::new("ethtool")
+                .args(["-S", "forward-left"])
+                .output()
+                .unwrap();
+            println!("{}", String::from_utf8(output.stdout).unwrap());
+
+            let output = Command::new("ethtool")
+                .args(["-S", "forward-right"])
+                .output()
+                .unwrap();
+            println!("{}", String::from_utf8(output.stdout).unwrap());
+
+            std::thread::sleep(Duration::from_secs(5));
+        }
+    });
+
+    while !ready.load(std::sync::atomic::Ordering::SeqCst) {}
+
+    {
+        println!("try to ping");
+        let _left_ns_guard = veth_pair.0.left.namespace.enter().unwrap();
+        let handle = std::process::Command::new("ping")
+            .args(["192.168.12.1", "-c", "10"])
+            .stdout(std::process::Stdio::piped())
+            .output()
+            .unwrap();
+
+        println!("{}", String::from_utf8(handle.stdout).unwrap());
+    }
+
+    handle.join().unwrap();
+    watch_handle.join().unwrap();
 }

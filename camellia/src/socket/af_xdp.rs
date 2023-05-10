@@ -331,7 +331,13 @@ impl XskSocket {
 
         for (send_index, frame) in iter.enumerate() {
             if (send_index as u32) < actual_sent {
-                let frame = frame.into();
+                let frame: TxFrame = frame.into();
+
+                if !Rc::ptr_eq(frame.umem(), &self.umem) {
+                    return Err(CamelliaError::InvalidArgument(
+                        "Frame does not belong to this socket".to_string(),
+                    ));
+                }
 
                 unsafe {
                     let tx_desc = xsk_ring_prod__tx_desc(

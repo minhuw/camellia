@@ -139,6 +139,10 @@ impl Frame {
     pub fn take_chunk(mut self) -> Chunk {
         self.chunk.take().unwrap()
     }
+
+    pub fn umem(&self) -> &Rc<RefCell<UMem>> {
+        &self.umem
+    }
 }
 
 pub struct RxFrame(Frame);
@@ -178,6 +182,10 @@ impl AppFrame {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+
+    pub fn umem(&self) -> &Rc<RefCell<UMem>> {
+        self.0.umem()
+    }
 }
 
 impl RxFrame {
@@ -216,6 +224,10 @@ impl RxFrame {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+
+    pub fn umem(&self) -> &Rc<RefCell<UMem>> {
+        self.0.umem()
+    }
 }
 
 impl TxFrame {
@@ -238,6 +250,10 @@ impl TxFrame {
 
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
+    }
+
+    pub fn umem(&self) -> &Rc<RefCell<UMem>> {
+        self.0.umem()
     }
 }
 
@@ -388,6 +404,7 @@ impl UMem {
             _num_chunks: num_chunks,
             inner: umem_inner,
         };
+
         for i in 0..num_chunks {
             umem.chunks.push(Chunk {
                 xdp_address: (i * chunk_size) as usize,
