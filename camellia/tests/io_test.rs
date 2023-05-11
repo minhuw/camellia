@@ -6,7 +6,10 @@ use std::{
 
 use camellia::{
     socket::af_xdp::XskSocketBuilder,
-    umem::frame::{AppFrame, UMemBuilder},
+    umem::{
+        frame::AppFrame,
+        umem::{DedicatedAccessor, UMemBuilder},
+    },
 };
 use common::veth::{VethDeviceBuilder, VethPair};
 use etherparse::PacketBuilder;
@@ -26,7 +29,10 @@ fn setup_veth() -> VethPair {
     right_device.build(left_device).unwrap()
 }
 
-fn build_a_packet(veth_pair: &VethPair, mut frame: AppFrame) -> camellia::umem::frame::AppFrame {
+fn build_a_packet(
+    veth_pair: &VethPair,
+    mut frame: AppFrame<DedicatedAccessor>,
+) -> camellia::umem::frame::AppFrame<DedicatedAccessor> {
     let builder = PacketBuilder::ethernet2(
         veth_pair.left.mac_addr.clone().bytes(),
         veth_pair.right.mac_addr.clone().bytes(),
@@ -58,7 +64,7 @@ fn test_packet_io() {
     let mut left_socket = XskSocketBuilder::new()
         .ifname("test-left")
         .queue_index(0)
-        .with_dedicated_umem(umem_left)
+        .with_umem(umem_left.into())
         .enable_cooperate_schedule()
         .build()
         .unwrap();
@@ -66,7 +72,7 @@ fn test_packet_io() {
     let mut right_socket = XskSocketBuilder::new()
         .ifname("test-right")
         .queue_index(0)
-        .with_dedicated_umem(umem_right)
+        .with_umem(umem_right.into())
         .enable_cooperate_schedule()
         .build()
         .unwrap();

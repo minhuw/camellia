@@ -2,18 +2,17 @@ use std::{
     net::{IpAddr, Ipv4Addr},
     os::fd::AsRawFd,
     process::Command,
-    sync::{atomic::AtomicBool, Arc},
+    sync::{atomic::AtomicBool, Arc, Mutex},
     time::Duration,
 };
 
-use etherparse::Ethernet2Header;
 use nix::errno::Errno;
 use nix::poll::{poll, PollFd, PollFlags};
 
 use anyhow::Result;
 use camellia::{
     socket::af_xdp::XskSocketBuilder,
-    umem::frame::{AppFrame, UMemBuilder},
+    umem::{shared::SharedAccessor, umem::UMemBuilder},
 };
 use common::{
     netns::NetNs,
@@ -97,16 +96,6 @@ macro_rules! loop_while_eintr {
     };
 }
 
-fn set_mac(frame: AppFrame, source_mac: MacAddr) -> AppFrame {
-    let mut frame = frame;
-    let (mut ether_header, _remain) = Ethernet2Header::from_slice(frame.raw_buffer()).unwrap();
-
-    ether_header.source = source_mac.bytes();
-    ether_header.write_to_slice(frame.raw_buffer_mut()).unwrap();
-
-    frame
-}
-
 #[test]
 #[ignore]
 fn test_packet_forward() {
@@ -139,29 +128,27 @@ fn test_packet_forward() {
     let mac_address_client = veth_pair.0.left.mac_addr.clone();
     let mac_address_server = veth_pair.1.right.mac_addr.clone();
 
-    let mac_address_left = veth_pair.0.right.mac_addr.clone();
-    let mac_address_right = veth_pair.1.left.mac_addr.clone();
-
     let handle = std::thread::spawn(move || {
         let _guard = forward_namespace_clone.enter().unwrap();
 
         display_interface();
 
-        let umem_left = UMemBuilder::new().num_chunks(4096).build().unwrap();
-        let umem_right = UMemBuilder::new().num_chunks(4096).build().unwrap();
+        let umem = Arc::new(Mutex::new(
+            UMemBuilder::new().num_chunks(4096).build().unwrap(),
+        ));
 
-        let mut left_socket = XskSocketBuilder::new()
+        let mut left_socket = XskSocketBuilder::<SharedAccessor>::new()
             .ifname("forward-left")
             .queue_index(0)
-            .with_dedicated_umem(umem_left)
-            .build()
+            .with_umem(umem.clone())
+            .build_shared()
             .unwrap();
 
-        let mut right_socket = XskSocketBuilder::new()
+        let mut right_socket = XskSocketBuilder::<SharedAccessor>::new()
             .ifname("forward-right")
             .queue_index(0)
-            .with_dedicated_umem(umem_right)
-            .build()
+            .with_umem(umem)
+            .build_shared()
             .unwrap();
 
         ready_clone.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -201,7 +188,6 @@ fn test_packet_forward() {
                                     || ether_header.destination == broadcase_address.bytes()
                                 {
                                     println!("ether header: {:?}", ether_header);
-                                    let frame = set_mac(frame.into(), mac_address_right);
                                     let (ether_header, _remaining) =
                                         etherparse::Ethernet2Header::from_slice(frame.raw_buffer())
                                             .unwrap();
@@ -234,7 +220,6 @@ fn test_packet_forward() {
                                 if ether_header.destination == mac_address_client.bytes()
                                     || ether_header.destination == broadcase_address.bytes()
                                 {
-                                    let frame = set_mac(frame.into(), mac_address_left);
                                     let (ether_header, _remaining) =
                                         etherparse::Ethernet2Header::from_slice(frame.raw_buffer())
                                             .unwrap();
