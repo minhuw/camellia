@@ -1,8 +1,8 @@
 use std::cell::RefCell;
 use std::cmp::min;
 use std::ffi::CString;
-use std::mem::MaybeUninit;
 use std::os::fd::AsRawFd;
+use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -40,9 +40,43 @@ pub struct RxQueue {
     inner: xsk_ring_cons,
 }
 
+impl  Default for RxQueue {
+    fn default() -> Self {
+        Self {
+            inner: xsk_ring_cons {
+                cached_prod: 0,
+                cached_cons: 0,
+                mask: 0,
+                size: 0,
+                producer: std::ptr::null_mut(),
+                consumer: std::ptr::null_mut(),
+                ring: std::ptr::null_mut(),
+                flags: std::ptr::null_mut()
+            }
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct TxQueue {
     inner: xsk_ring_prod,
+}
+
+impl Default for TxQueue {
+    fn default() -> Self {
+        Self {
+            inner: xsk_ring_prod {
+                cached_prod: 0,
+                cached_cons: 0,
+                mask: 0,
+                size: 0,
+                producer: std::ptr::null_mut(),
+                consumer: std::ptr::null_mut(),
+                ring: std::ptr::null_mut(),
+                flags: std::ptr::null_mut()
+            }
+        }
+    }
 }
 
 pub struct TxDescriptor {}
@@ -224,8 +258,8 @@ impl XskSocketBuilder<SharedAccessor> {
 pub struct XskSocket<M: UMemAccessor> {
     inner: *mut xsk_socket,
     umem: M::AccessorRef,
-    rx: RxQueue,
-    tx: TxQueue,
+    rx: Pin<Box<RxQueue>>,
+    tx: Pin<Box<TxQueue>>,
 }
 
 impl XskSocket<SharedAccessor> {
@@ -236,8 +270,8 @@ impl XskSocket<SharedAccessor> {
         config: xsk_socket_config,
     ) -> Result<Self, CamelliaError> {
         let mut raw_socket: *mut xsk_socket = std::ptr::null_mut();
-        let mut rx_queue = MaybeUninit::<RxQueue>::zeroed();
-        let mut tx_queue = MaybeUninit::<TxQueue>::zeroed();
+        let mut rx_queue = Box::pin(RxQueue::default());
+        let mut tx_queue = Box::pin(TxQueue::default());
         let mut fill_queue = Box::pin(FillQueue::default());
         let mut completion_queue = Box::pin(CompletionQueue::default());
 
@@ -254,8 +288,8 @@ impl XskSocket<SharedAccessor> {
                 ifname.as_ptr(),
                 queue_index,
                 umem.lock().unwrap().inner(),
-                &mut (*rx_queue.as_mut_ptr()).inner,
-                &mut (*tx_queue.as_mut_ptr()).inner,
+                &mut rx_queue.inner,
+                &mut tx_queue.inner,
                 &mut fill_queue.0,
                 &mut completion_queue.0,
                 &config,
@@ -279,8 +313,8 @@ impl XskSocket<SharedAccessor> {
         Ok(XskSocket {
             inner: raw_socket,
             umem,
-            rx: unsafe { rx_queue.assume_init() },
-            tx: unsafe { tx_queue.assume_init() },
+            rx: rx_queue,
+            tx: tx_queue,
         })
     }
 }
@@ -293,8 +327,8 @@ impl XskSocket<DedicatedAccessor> {
         config: xsk_socket_config,
     ) -> Result<Self, CamelliaError> {
         let mut raw_socket: *mut xsk_socket = std::ptr::null_mut();
-        let mut rx_queue = MaybeUninit::<RxQueue>::zeroed();
-        let mut tx_queue = MaybeUninit::<TxQueue>::zeroed();
+        let mut rx_queue = Box::pin(RxQueue::default());
+        let mut tx_queue = Box::pin(TxQueue::default());
 
         let ifname = CString::new(ifname).unwrap();
         log::info!(
@@ -309,8 +343,8 @@ impl XskSocket<DedicatedAccessor> {
                 ifname.as_ptr(),
                 queue_index,
                 umem.inner() as *mut _,
-                &mut (*rx_queue.as_mut_ptr()).inner,
-                &mut (*tx_queue.as_mut_ptr()).inner,
+                &mut rx_queue.inner,
+                &mut tx_queue.inner,
                 &config,
             ) {
                 0 => {}
@@ -327,8 +361,8 @@ impl XskSocket<DedicatedAccessor> {
         Ok(XskSocket {
             inner: raw_socket,
             umem,
-            rx: unsafe { rx_queue.assume_init() },
-            tx: unsafe { tx_queue.assume_init() },
+            rx: rx_queue,
+            tx: tx_queue,
         })
     }
 }

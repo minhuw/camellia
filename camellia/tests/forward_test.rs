@@ -1,13 +1,8 @@
 use std::{
     net::{IpAddr, Ipv4Addr},
-    os::fd::AsRawFd,
     process::Command,
     sync::{atomic::AtomicBool, Arc, Mutex},
-    time::Duration,
 };
-
-use nix::errno::Errno;
-use nix::poll::{poll, PollFd, PollFlags};
 
 use anyhow::Result;
 use camellia::{
@@ -82,18 +77,6 @@ fn setup_veth() -> Result<(VethPair, VethPair)> {
 fn display_interface() {
     let mut child = Command::new("ip").args(["addr", "ls"]).spawn().unwrap();
     child.wait().unwrap();
-}
-
-macro_rules! loop_while_eintr {
-    ($poll_expr: expr) => {
-        loop {
-            match $poll_expr {
-                Ok(nfds) => break nfds,
-                Err(Errno::EINTR) => (),
-                Err(e) => panic!("{}", e),
-            }
-        }
-    };
 }
 
 #[test]

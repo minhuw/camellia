@@ -48,7 +48,7 @@ impl DefaultEnv {
     fn umount_ns<P: AsRef<Path>>(path: P) -> Result<()> {
         let path = path.as_ref();
         umount2(path, MntFlags::MNT_DETACH)
-            .map_err(|e| anyhow::anyhow!(format!("unable to umount {}", path.display())))?;
+            .map_err(|_| anyhow::anyhow!(format!("unable to umount {}", path.display())))?;
         let _ = std::fs::remove_file(path);
         Ok(())
     }
