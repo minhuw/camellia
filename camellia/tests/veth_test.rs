@@ -1,7 +1,9 @@
 use common::veth::VethDeviceBuilder;
 use std::net::{IpAddr, Ipv4Addr};
 use std::process::Command;
+
 mod common;
+pub use common::*;
 
 #[test]
 fn test_veth_setup() {

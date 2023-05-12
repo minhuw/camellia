@@ -16,6 +16,7 @@ use etherparse::PacketBuilder;
 use std::thread::sleep;
 
 mod common;
+pub use common::*;
 
 fn setup_veth() -> VethPair {
     let left_device = VethDeviceBuilder::new("test-left")
