@@ -8,39 +8,31 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use libbpf_rs::libbpf_sys;
-use libc::sendto;
-use libc::MSG_DONTWAIT;
-use libxdp_sys::xsk_socket;
-use libxdp_sys::xsk_socket__create_shared;
-use libxdp_sys::xsk_socket_config;
-use libxdp_sys::xsk_socket_config__bindgen_ty_1;
-use libxdp_sys::XSK_RING_CONS__DEFAULT_NUM_DESCS;
-use libxdp_sys::XSK_RING_PROD__DEFAULT_NUM_DESCS;
-use libxdp_sys::{xsk_ring_cons, xsk_ring_prod};
+use libc::{sendto, MSG_DONTWAIT};
+
 use libxdp_sys::{
-    xsk_ring_cons__peek, xsk_ring_cons__release, xsk_ring_cons__rx_desc,
-    xsk_ring_prod__needs_wakeup, xsk_ring_prod__reserve, xsk_ring_prod__submit,
-    xsk_ring_prod__tx_desc, xsk_socket__create, xsk_socket__delete, xsk_socket__fd,
+    xsk_ring_cons, xsk_ring_cons__peek, xsk_ring_cons__release, xsk_ring_cons__rx_desc,
+    xsk_ring_prod, xsk_ring_prod__needs_wakeup, xsk_ring_prod__reserve, xsk_ring_prod__submit,
+    xsk_ring_prod__tx_desc, xsk_socket, xsk_socket__create, xsk_socket__create_shared,
+    xsk_socket__delete, xsk_socket__fd, xsk_socket_config, xsk_socket_config__bindgen_ty_1,
+    XSK_RING_CONS__DEFAULT_NUM_DESCS, XSK_RING_PROD__DEFAULT_NUM_DESCS,
 };
 use nix::errno::Errno;
 
 use crate::error::CamelliaError;
-use crate::umem::base::CompletionQueue;
-use crate::umem::base::DedicatedAccessor;
-use crate::umem::base::FillQueue;
-use crate::umem::base::UMem;
-use crate::umem::frame::AppFrame;
-use crate::umem::frame::RxFrame;
-use crate::umem::frame::TxFrame;
-use crate::umem::shared::SharedAccessor;
-use crate::umem::UMemAccessor;
+use crate::umem::{
+    base::{CompletionQueue, DedicatedAccessor, FillQueue, UMem},
+    frame::{AppFrame, RxFrame, TxFrame},
+    shared::SharedAccessor,
+    UMemAccessor,
+};
 
 #[derive(Debug)]
 pub struct RxQueue {
     inner: xsk_ring_cons,
 }
 
-impl  Default for RxQueue {
+impl Default for RxQueue {
     fn default() -> Self {
         Self {
             inner: xsk_ring_cons {
@@ -51,8 +43,8 @@ impl  Default for RxQueue {
                 producer: std::ptr::null_mut(),
                 consumer: std::ptr::null_mut(),
                 ring: std::ptr::null_mut(),
-                flags: std::ptr::null_mut()
-            }
+                flags: std::ptr::null_mut(),
+            },
         }
     }
 }
@@ -73,8 +65,8 @@ impl Default for TxQueue {
                 producer: std::ptr::null_mut(),
                 consumer: std::ptr::null_mut(),
                 ring: std::ptr::null_mut(),
-                flags: std::ptr::null_mut()
-            }
+                flags: std::ptr::null_mut(),
+            },
         }
     }
 }

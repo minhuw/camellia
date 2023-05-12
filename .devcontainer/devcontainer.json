@@ -8,7 +8,7 @@
         },
         "ghcr.io/meaningful-ooo/devcontainer-features/fish:1": {}
     },
-    "runArgs": [ "--cap-add=NET_ADMIN", "--cap-add=NET_RAW", "--cap-add=SYS_PTRACE", "--cap-add=SYS_ADMIN", "--security-opt", "seccomp=unconfined", "--security-opt", "apparmor=unconfined", "--ulimit", "nofile=1048576:1048576", "--ulimit", "memlock=67108864:67108864" ],
+    "runArgs": [ "--cap-add=NET_ADMIN", "--cap-add=NET_RAW", "--cap-add=SYS_PTRACE", "--cap-add=SYS_ADMIN", "--security-opt", "seccomp=unconfined", "--security-opt", "apparmor=unconfined", "--ulimit", "nofile=1048576:1048576", "--ulimit", "memlock=67108864:67108864"],
     "containerEnv": {
         "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER": "sudo -E"
     },
