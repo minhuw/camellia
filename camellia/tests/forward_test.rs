@@ -12,7 +12,7 @@ use nix::poll::{poll, PollFd, PollFlags};
 use anyhow::Result;
 use camellia::{
     socket::af_xdp::XskSocketBuilder,
-    umem::{shared::SharedAccessor, umem::UMemBuilder},
+    umem::{base::UMemBuilder, shared::SharedAccessor},
 };
 use common::{
     netns::NetNs,
@@ -97,14 +97,13 @@ macro_rules! loop_while_eintr {
 }
 
 #[test]
-#[ignore]
 fn test_packet_forward() {
     env_logger::init();
 
     let veth_pair = setup_veth().unwrap();
 
     {
-        let _left_ns_guard = veth_pair.0.left.namespace.enter().unwrap();
+        let _left_ns_guard = veth_pair.0.right.namespace.enter().unwrap();
         set_promiscuous(veth_pair.0.right.name.as_str());
         set_promiscuous(veth_pair.1.left.name.as_str());
     }
@@ -112,7 +111,7 @@ fn test_packet_forward() {
     let running = Arc::new(AtomicBool::new(true));
     let ready = Arc::new(AtomicBool::new(false));
     let running_clone = running.clone();
-    let running_second_clone = running.clone();
+    let running_clone_secondary = running.clone();
 
     let ready_clone = ready.clone();
 
@@ -134,13 +133,14 @@ fn test_packet_forward() {
         display_interface();
 
         let umem = Arc::new(Mutex::new(
-            UMemBuilder::new().num_chunks(4096).build().unwrap(),
+            UMemBuilder::new().num_chunks(16384).build().unwrap(),
         ));
 
         let mut left_socket = XskSocketBuilder::<SharedAccessor>::new()
             .ifname("forward-left")
             .queue_index(0)
             .with_umem(umem.clone())
+            .enable_cooperate_schedule()
             .build_shared()
             .unwrap();
 
@@ -148,124 +148,86 @@ fn test_packet_forward() {
             .ifname("forward-right")
             .queue_index(0)
             .with_umem(umem)
+            .enable_cooperate_schedule()
             .build_shared()
             .unwrap();
 
         ready_clone.store(true, std::sync::atomic::Ordering::SeqCst);
 
         while running.load(std::sync::atomic::Ordering::SeqCst) {
-            let mut pollfds = [
-                PollFd::new(
-                    left_socket.as_raw_fd(),
-                    PollFlags::POLLIN | PollFlags::POLLERR,
-                ),
-                PollFd::new(
-                    right_socket.as_raw_fd(),
-                    PollFlags::POLLIN | PollFlags::POLLERR,
-                ),
-            ];
-
-            let num_events =
-                Errno::result(loop_while_eintr!(poll(&mut pollfds, -1))).unwrap() as usize;
-
-            for i in 0..num_events {
-                if pollfds[i].revents().unwrap().contains(PollFlags::POLLERR) {
-                    panic!("POLLERR")
-                }
-                if pollfds[i].revents().unwrap().contains(PollFlags::POLLIN) {
-                    if pollfds[i].as_raw_fd() == left_socket.as_raw_fd() {
-                        let frames = left_socket.recv_bulk(32).unwrap();
-                        println!("receive {} frames from left socket", frames.len());
-
-                        let frames: Vec<_> = frames
-                            .into_iter()
-                            .map(|frame| {
-                                let (ether_header, _remaining) =
-                                    etherparse::Ethernet2Header::from_slice(frame.raw_buffer())
-                                        .unwrap();
-
-                                if ether_header.destination == mac_address_server.bytes()
-                                    || ether_header.destination == broadcase_address.bytes()
-                                {
-                                    println!("ether header: {:?}", ether_header);
-                                    let (ether_header, _remaining) =
-                                        etherparse::Ethernet2Header::from_slice(frame.raw_buffer())
-                                            .unwrap();
-                                    println!(
-                                        "after modification, ether header: {:?}",
-                                        ether_header
-                                    );
-                                    Some(frame)
-                                } else {
-                                    None
-                                }
-                            })
-                            .flatten()
-                            .collect();
-
-                        let remaining = right_socket.send_bulk(frames).unwrap();
-                        assert_eq!(remaining.len(), 0);
-                    } else if pollfds[i].as_raw_fd() == right_socket.as_raw_fd() {
-                        let frames = right_socket.recv_bulk(32).unwrap();
-                        println!("receive {} frames from right socket", frames.len());
-
-                        let frames: Vec<_> = frames
-                            .into_iter()
-                            .map(|frame| {
-                                let (ether_header, _remaining) =
-                                    etherparse::Ethernet2Header::from_slice(frame.raw_buffer())
-                                        .unwrap();
-                                println!("ether header: {:?}", ether_header);
-
-                                if ether_header.destination == mac_address_client.bytes()
-                                    || ether_header.destination == broadcase_address.bytes()
-                                {
-                                    let (ether_header, _remaining) =
-                                        etherparse::Ethernet2Header::from_slice(frame.raw_buffer())
-                                            .unwrap();
-                                    println!(
-                                        "after modification, ether header: {:?}",
-                                        ether_header
-                                    );
-                                    Some(frame)
-                                } else {
-                                    None
-                                }
-                            })
-                            .flatten()
-                            .collect();
-
-                        let remaining = left_socket.send_bulk(frames).unwrap();
-                        assert_eq!(remaining.len(), 0);
-                    } else {
-                        unreachable!()
-                    }
-                }
+            let frames = left_socket.recv_bulk(32).unwrap();
+            if frames.len() != 0 {
+                println!("receive {} frames from left socket", frames.len());
             }
+
+            let frames: Vec<_> = frames
+                .into_iter()
+                .map(|frame| {
+                    let (ether_header, _remaining) =
+                        etherparse::Ethernet2Header::from_slice(frame.raw_buffer()).unwrap();
+
+                    if ether_header.destination == mac_address_server.bytes()
+                        || ether_header.destination == broadcase_address.bytes()
+                    {
+                        Some(frame)
+                    } else {
+                        None
+                    }
+                })
+                .flatten()
+                .collect();
+
+            let remaining = right_socket.send_bulk(frames).unwrap();
+            assert_eq!(remaining.len(), 0);
+
+            let frames = right_socket.recv_bulk(32).unwrap();
+            if frames.len() != 0 {
+                println!("receive {} frames to right socket", frames.len());
+            }
+
+            let frames: Vec<_> = frames
+                .into_iter()
+                .map(|frame| {
+                    let (ether_header, _remaining) =
+                        etherparse::Ethernet2Header::from_slice(frame.raw_buffer()).unwrap();
+
+                    if ether_header.destination == mac_address_client.bytes()
+                        || ether_header.destination == broadcase_address.bytes()
+                    {
+                        Some(frame)
+                    } else {
+                        None
+                    }
+                })
+                .flatten()
+                .collect();
+
+            let remaining = left_socket.send_bulk(frames).unwrap();
+            assert_eq!(remaining.len(), 0);
         }
     });
 
-    let watch_handle = std::thread::spawn(move || {
-        while running_second_clone.load(std::sync::atomic::Ordering::SeqCst) {
-            let _guard = forward_namespace.enter().unwrap();
+    // let watch_handle = std::thread::spawn(move || {
+    //     while running_second_clone.load(std::sync::atomic::Ordering::SeqCst) {
+    //         let _guard = forward_namespace.enter().unwrap();
 
-            let output = Command::new("ethtool")
-                .args(["-S", "forward-left"])
-                .output()
-                .unwrap();
-            println!("{}", String::from_utf8(output.stdout).unwrap());
+    //         let output = Command::new("ethtool")
+    //             .args(["-S", "forward-left"])
+    //             .output()
+    //             .unwrap();
+    //         println!("{}", String::from_utf8(output.stdout).unwrap());
 
-            let output = Command::new("ethtool")
-                .args(["-S", "forward-right"])
-                .output()
-                .unwrap();
-            println!("{}", String::from_utf8(output.stdout).unwrap());
+    //         let output = Command::new("ethtool")
+    //             .args(["-S", "forward-right"])
+    //             .output()
+    //             .unwrap();
+    //         println!("{}", String::from_utf8(output.stdout).unwrap());
 
-            std::thread::sleep(Duration::from_secs(5));
-        }
-    });
+    //         std::thread::sleep(Duration::from_secs(5));
+    //     }
+    // });
 
-    while !ready.load(std::sync::atomic::Ordering::SeqCst) {}
+    // while !ready.load(std::sync::atomic::Ordering::SeqCst) {}
 
     {
         println!("try to ping");
@@ -278,7 +240,8 @@ fn test_packet_forward() {
 
         println!("{}", String::from_utf8(handle.stdout).unwrap());
     }
+    running_clone_secondary.store(false, std::sync::atomic::Ordering::SeqCst);
 
     handle.join().unwrap();
-    watch_handle.join().unwrap();
+    // watch_handle.join().unwrap();
 }

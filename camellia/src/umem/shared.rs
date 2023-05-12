@@ -1,18 +1,17 @@
 use std::{
     cell::RefCell,
     collections::HashMap,
+    pin::Pin,
     rc::Rc,
     sync::{Arc, Mutex},
 };
 
-use libxdp_sys::{xsk_ring_cons, xsk_ring_prod};
-
 use crate::error::CamelliaError;
 
 use super::{
+    base::{CompletionQueue, FillQueue, UMem},
     frame::{AppFrame, Chunk},
     libxdp::{populate_fill_ring, recycle_compeletion_ring},
-    umem::UMem,
     UMemAccessor,
 };
 
@@ -21,8 +20,8 @@ pub struct SharedAccessor {
     cached_chunks: Vec<Chunk>,
     filled_chunks: HashMap<u64, Chunk>,
     tx_chunks: HashMap<u64, Chunk>,
-    fill: xsk_ring_prod,
-    completion: xsk_ring_cons,
+    fill: Pin<Box<FillQueue>>,
+    completion: Pin<Box<CompletionQueue>>,
     chunk_size: u32,
 }
 
@@ -31,8 +30,8 @@ const SHARED_UMEM_DEFAULT_CHUNK_SIZE: usize = 128;
 impl SharedAccessor {
     pub fn new(
         shared_umem: Arc<Mutex<UMem>>,
-        fill: xsk_ring_prod,
-        completion: xsk_ring_cons,
+        fill: Pin<Box<FillQueue>>,
+        completion: Pin<Box<CompletionQueue>>,
     ) -> Result<SharedAccessor, CamelliaError> {
         let chunk_size = shared_umem.lock().unwrap().chunk_size;
         Ok(Self {
@@ -42,7 +41,7 @@ impl SharedAccessor {
             tx_chunks: HashMap::new(),
             fill,
             completion,
-            chunk_size: chunk_size,
+            chunk_size,
         })
     }
     fn pre_alloc(&mut self, n: usize) -> Result<(), CamelliaError> {
@@ -88,8 +87,9 @@ impl SharedAccessor {
 
     fn fill(&mut self, n: usize) -> Result<usize, CamelliaError> {
         self.pre_alloc(n)?;
+
         let populated = populate_fill_ring(
-            &mut self.fill,
+            &mut self.fill.0,
             n,
             &mut self.cached_chunks,
             &mut self.filled_chunks,
@@ -102,8 +102,9 @@ impl SharedAccessor {
 
     fn recycle(&mut self) -> Result<usize, CamelliaError> {
         let recycled = recycle_compeletion_ring(
-            &mut self.completion,
+            &mut self.completion.0,
             self.tx_chunks.len(),
+            self.chunk_size,
             &mut self.cached_chunks,
             &mut self.tx_chunks,
         );
@@ -112,9 +113,10 @@ impl SharedAccessor {
     }
 
     pub fn extract_recv(&mut self, xdp_addr: u64) -> Chunk {
+        // TODO(minhuw): add a helper function to get chunk identifier
+        // from xdp address, will be different in aligned and unaligned
+        // moode.
         let base_address = xdp_addr - (xdp_addr % (self.chunk_size as u64));
-        // The chunk must be filled before
-
         self.filled_chunks.remove(&base_address).unwrap()
     }
 

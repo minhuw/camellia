@@ -7,8 +7,8 @@ use std::{
 use camellia::{
     socket::af_xdp::XskSocketBuilder,
     umem::{
+        base::{DedicatedAccessor, UMemBuilder},
         frame::AppFrame,
-        umem::{DedicatedAccessor, UMemBuilder},
     },
 };
 use common::veth::{VethDeviceBuilder, VethPair};

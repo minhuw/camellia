@@ -25,18 +25,22 @@ use libxdp_sys::{
 use nix::errno::Errno;
 
 use crate::error::CamelliaError;
+use crate::umem::base::CompletionQueue;
+use crate::umem::base::DedicatedAccessor;
+use crate::umem::base::FillQueue;
+use crate::umem::base::UMem;
 use crate::umem::frame::AppFrame;
 use crate::umem::frame::RxFrame;
 use crate::umem::frame::TxFrame;
 use crate::umem::shared::SharedAccessor;
-use crate::umem::umem::DedicatedAccessor;
-use crate::umem::umem::UMem;
 use crate::umem::UMemAccessor;
 
+#[derive(Debug)]
 pub struct RxQueue {
     inner: xsk_ring_cons,
 }
 
+#[derive(Debug)]
 pub struct TxQueue {
     inner: xsk_ring_prod,
 }
@@ -234,8 +238,8 @@ impl XskSocket<SharedAccessor> {
         let mut raw_socket: *mut xsk_socket = std::ptr::null_mut();
         let mut rx_queue = MaybeUninit::<RxQueue>::zeroed();
         let mut tx_queue = MaybeUninit::<TxQueue>::zeroed();
-        let mut fill_queue = MaybeUninit::<xsk_ring_prod>::zeroed();
-        let mut completion_queue = MaybeUninit::<xsk_ring_cons>::zeroed();
+        let mut fill_queue = Box::pin(FillQueue::default());
+        let mut completion_queue = Box::pin(CompletionQueue::default());
 
         let ifname = CString::new(ifname).unwrap();
         log::info!(
@@ -252,8 +256,8 @@ impl XskSocket<SharedAccessor> {
                 umem.lock().unwrap().inner(),
                 &mut (*rx_queue.as_mut_ptr()).inner,
                 &mut (*tx_queue.as_mut_ptr()).inner,
-                &mut (*fill_queue.as_mut_ptr()),
-                &mut (*completion_queue.as_mut_ptr()),
+                &mut fill_queue.0,
+                &mut completion_queue.0,
                 &config,
             ) {
                 0 => {}
@@ -265,8 +269,8 @@ impl XskSocket<SharedAccessor> {
 
         let umem = Rc::new(RefCell::new(SharedAccessor::new(
             umem,
-            unsafe { fill_queue.assume_init() },
-            unsafe { completion_queue.assume_init() },
+            fill_queue,
+            completion_queue,
         )?));
 
         // TODO: validate that the RX ring is fulfilled
@@ -374,7 +378,7 @@ where
     }
 
     pub fn allocate(&mut self, n: usize) -> Result<Vec<AppFrame<M>>, CamelliaError> {
-        UMemAccessor::allocate(&mut self.umem, n)
+        UMemAccessor::allocate(&self.umem, n)
     }
 
     pub fn send<T>(&mut self, frame: T) -> Result<Option<T>, CamelliaError>

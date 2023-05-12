@@ -1,8 +1,9 @@
 use std::{
     cell::RefCell,
     collections::HashMap,
-    mem::MaybeUninit,
+    fmt::Display,
     os::{fd::AsRawFd, raw::c_void},
+    pin::Pin,
     rc::Rc,
     sync::Arc,
 };
@@ -94,11 +95,48 @@ impl UMemBuilder {
 }
 
 #[derive(Debug)]
+pub struct FillQueue(pub xsk_ring_prod);
+
+impl Default for FillQueue {
+    fn default() -> Self {
+        FillQueue(xsk_ring_prod {
+            cached_prod: 0,
+            cached_cons: 0,
+            mask: 0,
+            size: 0,
+            producer: std::ptr::null_mut(),
+            consumer: std::ptr::null_mut(),
+            ring: std::ptr::null_mut(),
+            flags: std::ptr::null_mut(),
+        })
+    }
+}
+
+#[derive(Debug)]
+pub struct CompletionQueue(pub xsk_ring_cons);
+
+impl Default for CompletionQueue {
+    fn default() -> Self {
+        CompletionQueue(xsk_ring_cons {
+            cached_prod: 0,
+            cached_cons: 0,
+            mask: 0,
+            size: 0,
+            producer: std::ptr::null_mut(),
+            consumer: std::ptr::null_mut(),
+            ring: std::ptr::null_mut(),
+            flags: std::ptr::null_mut(),
+        })
+    }
+}
+
+#[derive(Debug)]
 pub struct UMem {
     area: Arc<MMapArea>,
     pub chunks: Vec<Chunk>,
-    pub fill: xsk_ring_prod,
-    pub completion: xsk_ring_cons,
+    // We need to Pin rings because their addresses are stored in libxdp code
+    pub fill: Pin<Box<FillQueue>>,
+    pub completion: Pin<Box<CompletionQueue>>,
     pub chunk_size: u32,
     _num_chunks: u32,
     pub inner: *mut xsk_umem,
@@ -113,16 +151,16 @@ impl UMem {
         let mmap_size = chunk_size * num_chunks;
         let mut umem_inner: *mut xsk_umem = std::ptr::null_mut();
         let area = Arc::new(MMapArea::new((chunk_size * num_chunks) as usize)?);
-        let mut fill_queue = MaybeUninit::<xsk_ring_prod>::zeroed();
-        let mut completion_queue = MaybeUninit::<xsk_ring_cons>::zeroed();
+        let mut fill_queue = Box::pin(FillQueue::default());
+        let mut completion_queue = Box::pin(CompletionQueue::default());
 
         unsafe {
             match xsk_umem__create(
                 &mut umem_inner,
                 area.base_address() as *mut c_void,
                 mmap_size as u64,
-                fill_queue.as_mut_ptr(),
-                completion_queue.as_mut_ptr(),
+                &mut fill_queue.as_mut().0,
+                &mut completion_queue.as_mut().0,
                 &config,
             ) {
                 0 => {}
@@ -133,8 +171,8 @@ impl UMem {
         let mut umem = UMem {
             area,
             chunks: Vec::new(),
-            fill: unsafe { fill_queue.assume_init() },
-            completion: unsafe { completion_queue.assume_init() },
+            fill: fill_queue,
+            completion: completion_queue,
             chunk_size,
             _num_chunks: num_chunks,
             inner: umem_inner,
@@ -168,6 +206,16 @@ impl UMem {
 
     pub fn free(&mut self, chunks: impl IntoIterator<Item = Chunk>) {
         self.chunks.extend(chunks);
+    }
+}
+
+impl Display for UMem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{{fill: {:?}, completion: {:?}}}",
+            self.fill, self.completion,
+        )
     }
 }
 
@@ -210,7 +258,7 @@ impl DedicatedAccessor {
 
     pub fn fill(&mut self, n: usize) -> Result<usize, CamelliaError> {
         let actual_filled = populate_fill_ring(
-            &mut self.base.fill,
+            &mut self.base.fill.0,
             n,
             &mut self.base.chunks,
             &mut self.filled_chunks,
@@ -247,7 +295,7 @@ impl DedicatedAccessor {
         let mut start_index = 0;
         let completed = unsafe {
             xsk_ring_cons__peek(
-                &mut self.base.completion,
+                &mut self.base.completion.0,
                 self.tx_chunks.len() as u32,
                 &mut start_index,
             )
@@ -255,7 +303,7 @@ impl DedicatedAccessor {
 
         for complete_index in 0..completed {
             let xdp_addr = unsafe {
-                *xsk_ring_cons__comp_addr(&self.base.completion, start_index + complete_index)
+                *xsk_ring_cons__comp_addr(&self.base.completion.0, start_index + complete_index)
             };
 
             self.base
@@ -264,7 +312,7 @@ impl DedicatedAccessor {
         }
 
         unsafe {
-            xsk_ring_cons__release(&mut self.base.completion, completed);
+            xsk_ring_cons__release(&mut self.base.completion.0, completed);
         }
 
         Ok(completed as usize)
