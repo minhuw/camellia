@@ -3,4 +3,5 @@
 #![allow(non_snake_case)]
 #![allow(clippy::useless_transmute)]
 #![allow(clippy::missing_safety_doc)]
-include!("bindings.rs");
+include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
+
