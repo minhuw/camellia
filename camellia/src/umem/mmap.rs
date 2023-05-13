@@ -21,7 +21,7 @@ impl MMapArea {
                 None,
                 NonZeroUsize::new_unchecked(size),
                 ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
-                MapFlags::MAP_SHARED | MapFlags::MAP_ANONYMOUS,
+                MapFlags::MAP_SHARED | MapFlags::MAP_ANONYMOUS | MapFlags::MAP_HUGETLB,
                 -1,
                 0,
             )?
