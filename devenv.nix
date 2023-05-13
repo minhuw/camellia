@@ -5,26 +5,8 @@ let
   stdenv = pkgs.stdenv;
   lib = pkgs.lib;
 in {
-  # https://devenv.sh/packages/
-  #   packages = with pkgs; [ 
-  #     git 
-  #     nixpkgs-fmt
-  #     (hiPrio gcc)
-  #     llvmPackages.clangUseLLVM
-  #     llvmPackages.libllvm
-  #     llvmPackages.libclang
-  #     m4 
-  #     elfutils 
-  #     zlib 
-  #     libpcap 
-  #     bpftool 
-  #     linuxHeaders 
-  #     rustup 
-  #   ];
-
   packages = with pkgs; [
     bear
-    bpftool
     cmake
     elfutils
     git

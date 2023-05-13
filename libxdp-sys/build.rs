@@ -34,8 +34,6 @@ fn main() -> anyhow::Result<()> {
     let lib_path = out_path.join("lib");
     let include_path = out_path.join("include");
 
-    println!("out_path: {}", out_path.display());
-
     const XDP_LIBRARY_SUFFIX: &str = "lib/libxdp.a";
     const BPF_LIBRARY_SUFFIX: &str = "lib/libbpf.a";
 
@@ -44,11 +42,18 @@ fn main() -> anyhow::Result<()> {
 
     let bpftool = build_bpftool(&out_path)?;
 
-    println!("bpftool: {}", bpftool.display());
+    let compiler = match cc::Build::new().try_get_compiler() {
+        Ok(compiler) => compiler,
+        Err(_) => panic!(
+            "a C compiler is required to compile libxdp-sys"
+        ),
+    };
 
     let compile_result = Command::new("make")
         .arg("libxdp")
         .env("BPFTOOL", bpftool)
+        .env("CC", compiler.path())
+        .env("CFLAGS", compiler.cflags_env())
         .current_dir(src_path.join("xdp-tools"))
         .output()?;
 
@@ -102,7 +107,7 @@ fn main() -> anyhow::Result<()> {
         return Err(anyhow::anyhow!("unable to find libxdp or libbpf libraries"));
     }
 
-    println!("cargo:rustc-link-search={}", lib_path.display());
+    println!("cargo:rustc-link-search=native={}", lib_path.display());
     println!("cargo:rustc-link-lib=static=xdp");
     println!("cargo:rustc-link-lib=static=bpf");
 
