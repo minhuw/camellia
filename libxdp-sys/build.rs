@@ -2,9 +2,9 @@ extern crate bindgen;
 use which::which;
 
 use anyhow::{anyhow, Result};
-use std::{env, path::PathBuf, process::Command};
+use std::{env, path::{Path, PathBuf}, process::Command};
 
-fn build_bpftool(out_path: &PathBuf) -> Result<PathBuf> {
+fn build_bpftool(out_path: &Path) -> Result<PathBuf> {
     let src_path = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let out_path: PathBuf = out_path.join("bpftool/");
     std::fs::create_dir_all(&out_path).unwrap();

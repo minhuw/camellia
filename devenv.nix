@@ -5,27 +5,28 @@ let
   stdenv = pkgs.stdenv;
   lib = pkgs.lib;
 in {
-  packages = with pkgs; [
-    bear
-    cmake
-    elfutils
-    git
-    libpcap
-    (hiPrio gcc)
-    linuxHeaders
-    llvmPackages_15.clangUseLLVM
-    llvmPackages_15.libllvm
-    llvmPackages_15.libclang
-    m4
-    python3
-    pkgconfig
-    jq
-    rustup
-    strace
-    openssh
-    which
-    zlib
-  ];
+  packages = with pkgs;
+    [
+      bear
+      cmake
+      elfutils
+      git
+      libpcap
+      (hiPrio gcc)
+      linuxHeaders
+      llvmPackages_15.clangUseLLVM
+      llvmPackages_15.libllvm
+      llvmPackages_15.libclang
+      m4
+      python3
+      pkgconfig
+      jq
+      rustup
+      strace
+      openssh
+      which
+      zlib
+    ] ++ [ iperf3 ethtool ];
 
   # https://devenv.sh/pre-commit-hooks/
   pre-commit.hooks.shellcheck.enable = true;
@@ -38,6 +39,7 @@ in {
   # included we need to look in a few places.
   enterShell = ''
     export LD_LIBRARY_PATH=''${LD_LIBRARY_PATH%:}
+    export CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER='sudo -E'
     export LIBCLANG_PATH="${pkgs.llvmPackages_15.libclang.lib}/lib"
     export BINDGEN_EXTRA_CLANG_ARGS="$(< ${stdenv.cc}/nix-support/libc-crt1-cflags) \
       $(< ${stdenv.cc}/nix-support/libc-cflags) \

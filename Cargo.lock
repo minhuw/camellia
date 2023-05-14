@@ -108,6 +108,7 @@ dependencies = [
  "log",
  "nix",
  "once_cell",
+ "rlimit",
  "thiserror",
 ]
 
@@ -889,6 +890,15 @@ name = "regex-syntax"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a5996294f19bd3aae0453a862ad728f60e6600695733dd5df01da90c54363a3c"
+
+[[package]]
+name = "rlimit"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8a29d87a652dc4d43c586328706bb5cdff211f3f39a530f240b53f7221dab8e"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "rustc-hash"

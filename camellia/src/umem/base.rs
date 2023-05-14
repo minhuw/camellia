@@ -1,11 +1,15 @@
 use std::{
     cell::RefCell,
+    cmp::min,
     collections::HashMap,
     fmt::Display,
+    ops::{AddAssign, SubAssign},
     os::{fd::AsRawFd, raw::c_void},
     pin::Pin,
     rc::Rc,
-    sync::Arc,
+    sync::{
+        Arc, Mutex,
+    },
 };
 
 use libxdp_sys::{
@@ -142,6 +146,8 @@ pub struct UMem {
     pub inner: *mut xsk_umem,
 }
 
+static LOCKED_IO_MEMORY: Mutex<u64> = Mutex::new(0);
+
 impl UMem {
     fn new(
         chunk_size: u32,
@@ -153,6 +159,20 @@ impl UMem {
         let area = Arc::new(MMapArea::new((chunk_size * num_chunks) as usize)?);
         let mut fill_queue = Box::pin(FillQueue::default());
         let mut completion_queue = Box::pin(CompletionQueue::default());
+
+        let mut locked_memory = LOCKED_IO_MEMORY.lock().unwrap();
+        locked_memory.add_assign(mmap_size as u64);
+
+        rlimit::Resource::MEMLOCK
+            .get()
+            .and_then(|(soft, hard)| {
+                if min(soft, hard) < *locked_memory {
+                    rlimit::Resource::MEMLOCK.set(*locked_memory, *locked_memory)
+                } else {
+                    Ok(())
+                }
+            })
+            .unwrap();
 
         unsafe {
             match xsk_umem__create(
@@ -225,6 +245,8 @@ impl Drop for UMem {
         if errno < 0 {
             eprintln!("failed to delete xsk umem: {}", Errno::from_i32(-errno));
         }
+        let mut locked_memory = LOCKED_IO_MEMORY.lock().unwrap();
+        locked_memory.sub_assign(self._num_chunks as u64 * self.chunk_size as u64);
     }
 }
 
