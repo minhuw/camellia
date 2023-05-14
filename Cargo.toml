@@ -4,3 +4,6 @@ members = [
     "libxdp-sys",
     "camellia",
 ]
+
+[profile.bench]
+debug = true

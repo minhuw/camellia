@@ -1,6 +1,4 @@
-{ pkgs ? import (fetchTarball
-  "https://github.com/NixOS/nixpkgs/archive/1a411f23ba299db155a5b45d5e145b85a7aafc42.tar.gz")
-  { }, ... }:
+{ pkgs, ... }:
 let
   stdenv = pkgs.stdenv;
   lib = pkgs.lib;
@@ -19,14 +17,12 @@ in {
       llvmPackages_15.libclang
       m4
       python3
-      pkgconfig
-      jq
       rustup
       strace
       openssh
       which
       zlib
-    ] ++ [ iperf3 ethtool ];
+    ] ++ [ iperf3 ethtool pkgs.linuxPackages_latest.perf ];
 
   # https://devenv.sh/pre-commit-hooks/
   pre-commit.hooks.shellcheck.enable = true;

@@ -15,3 +15,7 @@ target/
 .devenv*
 devenv.local.nix
 .envrc
+
+# perf data and flamegraph
+perf.data*
+flamegraph.svg
