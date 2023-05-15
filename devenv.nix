@@ -15,6 +15,7 @@ in {
       llvmPackages_15.clangUseLLVM
       llvmPackages_15.libllvm
       llvmPackages_15.libclang
+      flamegraph
       m4
       python3
       rustup

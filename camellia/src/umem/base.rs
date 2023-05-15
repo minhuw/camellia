@@ -1,5 +1,5 @@
 use std::{
-    cell::RefCell,
+    cell::{RefCell, Ref},
     cmp::min,
     collections::HashMap,
     fmt::Display,
@@ -379,6 +379,10 @@ impl UMemAccessor for DedicatedAccessor {
 
     fn fill(umem_rc: &Self::AccessorRef, n: usize) -> Result<usize, CamelliaError> {
         umem_rc.borrow_mut().fill(n)
+    }
+
+    fn fill_inner(umem_rc: &Self::AccessorRef) -> Ref<xsk_ring_prod> {
+        Ref::map(umem_rc.borrow(), |umem| &umem.base.fill.0)
     }
 
     fn recycle(umem_rc: &Self::AccessorRef) -> Result<usize, CamelliaError> {

@@ -295,7 +295,7 @@ pub fn set_rps_cores(name: &str, cores: &[usize]) {
 
     let sys_path = format!("{}/class/net/{}/queues", temp_dir.path().display(), name);
 
-    log::debug!("set_rps_cores: sys_path={}", sys_path);
+    println!("set_rps_cores: sys_path={}", sys_path);
 
     for entry in std::fs::read_dir(sys_path).unwrap() {
         let entry = entry.unwrap();
@@ -311,7 +311,7 @@ pub fn set_rps_cores(name: &str, cores: &[usize]) {
             let file = path.join("rps_cpus");
             let bitmap = cores.iter().map(|c| 1u64 << c).fold(0, |acc, m| acc | m);
 
-            log::debug!("write {:x} to {}", bitmap, file.display());
+            println!("write {:x} to {}", bitmap, file.display());
 
             std::fs::write(file, format!("{:x}", bitmap)).unwrap();
         }

@@ -44,7 +44,7 @@ pub fn setup_veth() -> Result<(VethPair, VethPair)> {
 
         client_exec_handle.wait().unwrap();
 
-        set_rps_cores(left_pair.left.name.as_str(), &[0]);
+        set_rps_cores(left_pair.left.name.as_str(), &[1]);
     }
 
     {
@@ -58,15 +58,15 @@ pub fn setup_veth() -> Result<(VethPair, VethPair)> {
 
         right_exec_handle.wait().unwrap();
 
-        set_rps_cores(right_pair.right.name.as_str(), &[2]);
+        set_rps_cores(right_pair.right.name.as_str(), &[3]);
     }
 
     {
         let _guard = forward_netns.enter().unwrap();
         set_promiscuous(left_pair.right.name.as_str());
         set_promiscuous(right_pair.left.name.as_str());
-        set_rps_cores(left_pair.right.name.as_str(), &[1]);
-        set_rps_cores(right_pair.left.name.as_str(), &[1]);
+        set_rps_cores(left_pair.right.name.as_str(), &[2]);
+        set_rps_cores(right_pair.left.name.as_str(), &[2]);
     }
 
     Ok((left_pair, right_pair))

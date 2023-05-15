@@ -8,6 +8,9 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use libbpf_rs::libbpf_sys;
+use libc::SOL_SOCKET;
+use libc::c_int;
+use libc::c_void;
 use libc::{sendto, MSG_DONTWAIT};
 
 use libxdp_sys::{
@@ -20,6 +23,9 @@ use libxdp_sys::{
 use nix::errno::Errno;
 
 use crate::error::CamelliaError;
+use crate::umem::libxdp::need_wakeup;
+use crate::umem::libxdp::wakeup_rx;
+use crate::umem::libxdp::wakeup_tx;
 use crate::umem::{
     base::{CompletionQueue, DedicatedAccessor, FillQueue, UMem},
     frame::{AppFrame, RxFrame, TxFrame},
@@ -95,6 +101,7 @@ where
     no_default_prog: bool,
     zero_copy: bool,
     cooperate_schedule: bool,
+    busy_polling: bool,
     mode: XDPMode,
     umem: Option<M::UMemRef>,
 }
@@ -123,6 +130,7 @@ where
             no_default_prog: false,
             zero_copy: false,
             cooperate_schedule: false,
+            busy_polling: false,
         }
     }
 
@@ -214,6 +222,11 @@ where
         self
     }
 
+    pub fn enable_busy_polling(mut self) -> Self {
+        self.busy_polling = true;
+        self
+    }
+
     pub fn with_umem(mut self, umem: M::UMemRef) -> Self {
         if self.umem.is_some() {
             panic!("UMem is already set");
@@ -221,30 +234,101 @@ where
         self.umem = Some(umem);
         self
     }
+
+    pub fn set_busy_polling(raw_fd: i32) -> Result<(), CamelliaError> {
+        // libc and nix don't give us these two setsockopt options yet
+        const SO_PREFER_BUSY_POLL: c_int = 69;
+        const SO_BUSY_POLL_BUDGET: c_int = 70;
+
+        let enable: c_int = 1;
+        let busy_poll_duration: c_int = 20;
+        let busy_poll_budget: c_int = 32;
+
+        unsafe {
+            Errno::result(libc::setsockopt(
+                raw_fd,
+                SOL_SOCKET,
+                SO_PREFER_BUSY_POLL,
+                &enable as *const c_int as *const c_void,
+                std::mem::size_of::<c_int>() as u32,
+            ))?;
+
+            Errno::result(libc::setsockopt(
+                raw_fd,
+                SOL_SOCKET,
+                libc::SO_BUSY_POLL,
+                &busy_poll_duration as *const c_int as *const c_void,
+                std::mem::size_of::<c_int>() as u32,
+            ))?;
+
+            Errno::result(libc::setsockopt(
+                raw_fd,
+                SOL_SOCKET,
+                SO_BUSY_POLL_BUDGET,
+                &busy_poll_budget as *const c_int as *const c_void,
+                std::mem::size_of::<c_int>() as u32,
+            ))?;
+
+            Ok(())
+        }
+    }
 }
 
 impl XskSocketBuilder<DedicatedAccessor> {
     pub fn build(self) -> Result<XskSocket<DedicatedAccessor>, CamelliaError> {
         let config = self.construct_config()?;
-        XskSocket::<DedicatedAccessor>::new(
+        let schedule_mode = if self.busy_polling {
+            ScheduleMode::BusyPolling
+        } else if self.cooperate_schedule {
+            ScheduleMode::Cooperative
+        } else {
+            ScheduleMode::Legacy
+        };
+
+        let xsk_socket = XskSocket::<DedicatedAccessor>::new(
             &self.ifname.unwrap(),
             self.queue_index.unwrap(),
             self.umem.unwrap(),
             config,
-        )
+            schedule_mode
+        )?;
+        if self.busy_polling {
+            Self::set_busy_polling(xsk_socket.as_raw_fd())?;
+        }
+        Ok(xsk_socket)
     }
 }
 
 impl XskSocketBuilder<SharedAccessor> {
     pub fn build_shared(self) -> Result<XskSocket<SharedAccessor>, CamelliaError> {
         let config = self.construct_config()?;
-        XskSocket::<SharedAccessor>::new(
+        let schedule_mode = if self.busy_polling {
+            ScheduleMode::BusyPolling
+        } else if self.cooperate_schedule {
+            ScheduleMode::Cooperative
+        } else {
+            ScheduleMode::Legacy
+        };
+
+        let xsk_socket = XskSocket::<SharedAccessor>::new(
             &self.ifname.unwrap(),
             self.queue_index.unwrap(),
             self.umem.unwrap(),
             config,
-        )
+            schedule_mode
+        )?;
+
+        if self.busy_polling {
+            Self::set_busy_polling(xsk_socket.as_raw_fd())?;
+        }
+        Ok(xsk_socket)
     }
+}
+
+enum ScheduleMode {
+    Legacy,
+    Cooperative,
+    BusyPolling,
 }
 
 pub struct XskSocket<M: UMemAccessor> {
@@ -252,14 +336,16 @@ pub struct XskSocket<M: UMemAccessor> {
     umem: M::AccessorRef,
     rx: Pin<Box<RxQueue>>,
     tx: Pin<Box<TxQueue>>,
+    schedule_mode: ScheduleMode
 }
 
 impl XskSocket<SharedAccessor> {
-    pub fn new(
+    fn new(
         ifname: &str,
         queue_index: u32,
         umem: <SharedAccessor as UMemAccessor>::UMemRef,
         config: xsk_socket_config,
+        schedule_mode: ScheduleMode
     ) -> Result<Self, CamelliaError> {
         let mut raw_socket: *mut xsk_socket = std::ptr::null_mut();
         let mut rx_queue = Box::pin(RxQueue::default());
@@ -307,16 +393,18 @@ impl XskSocket<SharedAccessor> {
             umem,
             rx: rx_queue,
             tx: tx_queue,
+            schedule_mode
         })
     }
 }
 
 impl XskSocket<DedicatedAccessor> {
-    pub fn new(
+    fn new(
         ifname: &str,
         queue_index: u32,
         umem: <DedicatedAccessor as UMemAccessor>::UMemRef,
         config: xsk_socket_config,
+        schedule_mode: ScheduleMode
     ) -> Result<Self, CamelliaError> {
         let mut raw_socket: *mut xsk_socket = std::ptr::null_mut();
         let mut rx_queue = Box::pin(RxQueue::default());
@@ -355,6 +443,7 @@ impl XskSocket<DedicatedAccessor> {
             umem,
             rx: rx_queue,
             tx: tx_queue,
+            schedule_mode
         })
     }
 }
@@ -374,6 +463,19 @@ where
 
         let received: u32 =
             unsafe { xsk_ring_cons__peek(&mut self.rx.inner, size as u32, &mut start_index) };
+
+        if received == 0 {
+            match self.schedule_mode {
+                ScheduleMode::Cooperative | ScheduleMode::Legacy => {
+                    if need_wakeup(&M::fill_inner(&self.umem)) {
+                        wakeup_rx(self.as_raw_fd())?;
+                    }
+                }
+                ScheduleMode::BusyPolling => {
+                    wakeup_rx(self.as_raw_fd())?;
+                }
+            }
+        }
 
         assert!((received as usize) <= size);
 
@@ -468,27 +570,20 @@ where
 
         unsafe {
             xsk_ring_prod__submit(&mut self.tx.inner, actual_sent);
+        }
 
-            // When cooperate schedule is disabled, we always need to wake up the TX queue
-            // https://lore.kernel.org/bpf/20201130185205.196029-5-bjorn.topel@gmail.com/
-            // But the wakeup flag is set even when XDP_USE_NEED_WAKEUP is not set, so we
-            // happlily always checks the XDP_RING_NEED_WAKEUP flag.
-            if xsk_ring_prod__needs_wakeup(&self.tx.inner) != 0 {
-                Errno::result(sendto(
-                    self.as_raw_fd(),
-                    std::ptr::null(),
-                    0,
-                    MSG_DONTWAIT,
-                    std::ptr::null(),
-                    0,
-                ))
-                .or_else(|err| {
-                    if err == Errno::EAGAIN {
-                        Ok(0)
-                    } else {
-                        Err(err)
-                    }
-                })?;
+        // When cooperate schedule is disabled, we always need to wake up the TX queue
+        // https://lore.kernel.org/bpf/20201130185205.196029-5-bjorn.topel@gmail.com/
+        // But the wakeup flag is set even when XDP_USE_NEED_WAKEUP is not set, so we
+        // happlily always checks the XDP_RING_NEED_WAKEUP flag.
+        match self.schedule_mode {
+            ScheduleMode::Legacy | ScheduleMode::BusyPolling => {
+                wakeup_tx(self.as_raw_fd())?;
+            }
+            ScheduleMode::Cooperative => {
+                if need_wakeup(&self.tx.inner) {
+                    wakeup_tx(self.as_raw_fd())?;
+                }
             }
         }
 

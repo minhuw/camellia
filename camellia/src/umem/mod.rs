@@ -1,6 +1,10 @@
+use std::{cell::Ref};
+
+use libxdp_sys::xsk_ring_prod;
+
 use crate::error::CamelliaError;
 
-use self::frame::{AppFrame, Chunk};
+use self::{frame::{AppFrame, Chunk}};
 
 pub mod base;
 pub mod frame;
@@ -13,6 +17,8 @@ pub trait UMemAccessor: Sized {
     type AccessorRef: Clone;
 
     fn inner(umem_rc: &Self::AccessorRef) -> usize;
+
+    fn fill_inner(umem_rc: &Self::AccessorRef) -> Ref<xsk_ring_prod>;
 
     fn allocate(
         umem_rc: &Self::AccessorRef,

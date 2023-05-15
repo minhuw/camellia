@@ -1,10 +1,12 @@
 use std::{
-    cell::RefCell,
+    cell::{RefCell, Ref},
     collections::HashMap,
     pin::Pin,
     rc::Rc,
     sync::{Arc, Mutex},
 };
+
+use libxdp_sys::xsk_ring_prod;
 
 use crate::error::CamelliaError;
 
@@ -159,6 +161,10 @@ impl UMemAccessor for SharedAccessor {
 
     fn inner(umem_rc: &Self::AccessorRef) -> usize {
         umem_rc.borrow_mut().shared_umem.lock().unwrap().inner() as usize
+    }
+
+    fn fill_inner(umem_rc: &Self::AccessorRef) -> Ref<xsk_ring_prod> {
+        Ref::map(umem_rc.borrow(), |umem| &umem.fill.0)
     }
 
     fn recycle(umem_rc: &Self::AccessorRef) -> Result<usize, CamelliaError> {

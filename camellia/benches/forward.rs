@@ -1,4 +1,5 @@
 use std::{
+    os::fd::AsRawFd,
     sync::{atomic::AtomicBool, Arc, Mutex},
     thread::JoinHandle,
     time::Duration,
@@ -8,19 +9,14 @@ use camellia::{
     socket::af_xdp::XskSocketBuilder,
     umem::{base::UMemBuilder, shared::SharedAccessor},
 };
-use common::{
-    netns::NetNs,
-    stdenv::setup_veth,
-    veth::{MacAddr},
-};
+use common::{netns::NetNs, stdenv::setup_veth, veth::MacAddr};
 use criterion::{criterion_group, criterion_main, Criterion};
+use nix::sys::epoll::{self, EpollEvent};
 
 mod common;
 pub use common::*;
 
-fn prepare_env() -> (Arc<NetNs>, Arc<NetNs>, Arc<AtomicBool>, JoinHandle<()>) {
-    env_logger::init();
-
+fn prepare_env(busy_poll: bool) -> (Arc<NetNs>, Arc<NetNs>, Arc<AtomicBool>, JoinHandle<()>) {
     let veth_pair = setup_veth().unwrap();
 
     let running = Arc::new(AtomicBool::new(true));
@@ -63,60 +59,153 @@ fn prepare_env() -> (Arc<NetNs>, Arc<NetNs>, Arc<AtomicBool>, JoinHandle<()>) {
 
         ready_clone.store(true, std::sync::atomic::Ordering::SeqCst);
 
-        while running_clone.load(std::sync::atomic::Ordering::SeqCst) {
-            let frames = left_socket.recv_bulk(32).unwrap();
-            if frames.len() != 0 {
-                log::debug!("receive {} frames from left socket", frames.len());
+        if busy_poll {
+            while running_clone.load(std::sync::atomic::Ordering::SeqCst) {
+                let frames = left_socket.recv_bulk(32).unwrap();
+                if frames.len() != 0 {
+                    log::debug!("receive {} frames from left socket", frames.len());
+                }
+
+                let frames: Vec<_> = frames
+                    .into_iter()
+                    .map(|frame| {
+                        let (ether_header, _remaining) =
+                            etherparse::Ethernet2Header::from_slice(frame.raw_buffer()).unwrap();
+
+                        log::debug!("receive packet from right socket: {:?}", ether_header);
+
+                        if ether_header.destination == mac_address_server.bytes()
+                            || ether_header.destination == broadcase_address.bytes()
+                        {
+                            Some(frame)
+                        } else {
+                            None
+                        }
+                    })
+                    .flatten()
+                    .collect();
+
+                let remaining = right_socket.send_bulk(frames).unwrap();
+                assert_eq!(remaining.len(), 0);
+
+                let frames = right_socket.recv_bulk(32).unwrap();
+                if frames.len() != 0 {
+                    log::debug!("receive {} frames from right socket", frames.len());
+                }
+
+                let frames: Vec<_> = frames
+                    .into_iter()
+                    .map(|frame| {
+                        let (ether_header, _remaining) =
+                            etherparse::Ethernet2Header::from_slice(frame.raw_buffer()).unwrap();
+
+                        log::debug!("receive packet from right socket: {:?}", ether_header);
+
+                        if ether_header.destination == mac_address_client.bytes()
+                            || ether_header.destination == broadcase_address.bytes()
+                        {
+                            Some(frame)
+                        } else {
+                            None
+                        }
+                    })
+                    .flatten()
+                    .collect();
+
+                let remaining = left_socket.send_bulk(frames).unwrap();
+                assert_eq!(remaining.len(), 0);
             }
+        } else {
+            let mut left_event =
+                epoll::EpollEvent::new(epoll::EpollFlags::EPOLLIN, left_socket.as_raw_fd() as u64);
+            let mut right_event =
+                epoll::EpollEvent::new(epoll::EpollFlags::EPOLLIN, right_socket.as_raw_fd() as u64);
 
-            let frames: Vec<_> = frames
-                .into_iter()
-                .map(|frame| {
-                    let (ether_header, _remaining) =
-                        etherparse::Ethernet2Header::from_slice(frame.raw_buffer()).unwrap();
+            let epfd = epoll::epoll_create().unwrap();
+            epoll::epoll_ctl(
+                epfd,
+                epoll::EpollOp::EpollCtlAdd,
+                left_socket.as_raw_fd(),
+                Some(&mut left_event),
+            )
+            .unwrap();
+            epoll::epoll_ctl(
+                epfd,
+                epoll::EpollOp::EpollCtlAdd,
+                right_socket.as_raw_fd(),
+                Some(&mut right_event),
+            )
+            .unwrap();
 
-                    log::debug!("receive packet from right socket: {:?}", ether_header);
+            let mut events = [EpollEvent::empty(); 100];
+            let timeout_ms = 1000;
 
-                    if ether_header.destination == mac_address_server.bytes()
-                        || ether_header.destination == broadcase_address.bytes()
-                    {
-                        Some(frame)
+            while running_clone.load(std::sync::atomic::Ordering::SeqCst) {
+                let num_events = epoll::epoll_wait(epfd, &mut events, timeout_ms).unwrap();
+
+                for i in 0..num_events {
+                    let fd = events[i].data() as i32;
+                    if fd == left_socket.as_raw_fd() {
+                        let frames = left_socket.recv_bulk(32).unwrap();
+                        if frames.len() != 0 {
+                            log::debug!("receive {} frames from left socket", frames.len());
+                        }
+
+                        let frames: Vec<_> = frames
+                            .into_iter()
+                            .map(|frame| {
+                                let (ether_header, _remaining) =
+                                    etherparse::Ethernet2Header::from_slice(frame.raw_buffer())
+                                        .unwrap();
+
+                                log::debug!("receive packet from right socket: {:?}", ether_header);
+
+                                if ether_header.destination == mac_address_server.bytes()
+                                    || ether_header.destination == broadcase_address.bytes()
+                                {
+                                    Some(frame)
+                                } else {
+                                    None
+                                }
+                            })
+                            .flatten()
+                            .collect();
+
+                        let remaining = right_socket.send_bulk(frames).unwrap();
+                        assert_eq!(remaining.len(), 0);
+                    } else if fd == right_socket.as_raw_fd() {
+                        let frames = right_socket.recv_bulk(32).unwrap();
+                        if frames.len() != 0 {
+                            log::debug!("receive {} frames from right socket", frames.len());
+                        }
+
+                        let frames: Vec<_> = frames
+                            .into_iter()
+                            .map(|frame| {
+                                let (ether_header, _remaining) =
+                                    etherparse::Ethernet2Header::from_slice(frame.raw_buffer())
+                                        .unwrap();
+
+                                log::debug!("receive packet from right socket: {:?}", ether_header);
+
+                                if ether_header.destination == mac_address_client.bytes()
+                                    || ether_header.destination == broadcase_address.bytes()
+                                {
+                                    Some(frame)
+                                } else {
+                                    None
+                                }
+                            })
+                            .flatten()
+                            .collect();
+
+                        let remaining = left_socket.send_bulk(frames).unwrap();
+                        assert_eq!(remaining.len(), 0);
                     } else {
-                        None
+                        panic!("unexpected fd: {}", fd);
                     }
-                })
-                .flatten()
-                .collect();
-
-            let remaining = right_socket.send_bulk(frames).unwrap();
-            assert_eq!(remaining.len(), 0);
-
-            let frames = right_socket.recv_bulk(32).unwrap();
-            if frames.len() != 0 {
-                log::debug!("receive {} frames from right socket", frames.len());
+                }
             }
-
-            let frames: Vec<_> = frames
-                .into_iter()
-                .map(|frame| {
-                    let (ether_header, _remaining) =
-                        etherparse::Ethernet2Header::from_slice(frame.raw_buffer()).unwrap();
-
-                    log::debug!("receive packet from right socket: {:?}", ether_header);
-
-                    if ether_header.destination == mac_address_client.bytes()
-                        || ether_header.destination == broadcase_address.bytes()
-                    {
-                        Some(frame)
-                    } else {
-                        None
-                    }
-                })
-                .flatten()
-                .collect();
-
-            let remaining = left_socket.send_bulk(frames).unwrap();
-            assert_eq!(remaining.len(), 0);
         }
     });
 
@@ -174,8 +263,8 @@ fn run_iperf(client_ns: &Arc<NetNs>, server_ns: &Arc<NetNs>) {
     handle.join().unwrap();
 }
 
-fn criterion_benchmark(c: &mut Criterion) {
-    let (client_ns, server_ns, stop_signal, handle) = prepare_env();
+fn busypoll_benchmark(c: &mut Criterion) {
+    let (client_ns, server_ns, stop_signal, handle) = prepare_env(true);
 
     let mut group = c.benchmark_group("Bandwidth");
     group.sample_size(10).bench_function("busy polling", |b| {
@@ -188,5 +277,19 @@ fn criterion_benchmark(c: &mut Criterion) {
     handle.join().unwrap();
 }
 
-criterion_group!(benches, criterion_benchmark);
+fn epoll_benchmark(c: &mut Criterion) {
+    let (client_ns, server_ns, stop_signal, handle) = prepare_env(false);
+
+    let mut group = c.benchmark_group("Bandwidth");
+    group
+        .sample_size(10)
+        .bench_function("epoll", |b| b.iter(|| run_iperf(&client_ns, &server_ns)));
+
+    group.finish();
+
+    stop_signal.store(false, std::sync::atomic::Ordering::SeqCst);
+    handle.join().unwrap();
+}
+
+criterion_group!(benches, busypoll_benchmark, epoll_benchmark);
 criterion_main!(benches);
