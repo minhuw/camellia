@@ -11,7 +11,7 @@ use camellia::{
 use common::{
     netns::NetNs,
     stdenv::setup_veth,
-    veth::{set_promiscuous, MacAddr},
+    veth::{MacAddr},
 };
 use criterion::{criterion_group, criterion_main, Criterion};
 
@@ -22,12 +22,6 @@ fn prepare_env() -> (Arc<NetNs>, Arc<NetNs>, Arc<AtomicBool>, JoinHandle<()>) {
     env_logger::init();
 
     let veth_pair = setup_veth().unwrap();
-
-    {
-        let _guard = veth_pair.0.right.namespace.enter().unwrap();
-        set_promiscuous(veth_pair.0.right.name.as_str());
-        set_promiscuous(veth_pair.1.left.name.as_str());
-    }
 
     let running = Arc::new(AtomicBool::new(true));
     let ready = Arc::new(AtomicBool::new(false));
@@ -137,7 +131,7 @@ fn run_iperf(client_ns: &Arc<NetNs>, server_ns: &Arc<NetNs>) {
 
     let handle = {
         std::thread::spawn(move || {
-            core_affinity::set_for_current(core_affinity::CoreId { id: 0 });
+            core_affinity::set_for_current(core_affinity::CoreId { id: 2 });
             let _guarad = server_ns.enter().unwrap();
             if !std::process::Command::new("iperf3")
                 .args(["-s", "-p", "9000", "-1"])
@@ -154,7 +148,7 @@ fn run_iperf(client_ns: &Arc<NetNs>, server_ns: &Arc<NetNs>) {
     std::thread::sleep(Duration::from_secs(1));
 
     {
-        core_affinity::set_for_current(core_affinity::CoreId { id: 2 });
+        core_affinity::set_for_current(core_affinity::CoreId { id: 0 });
         let _guard = client_ns.enter().unwrap();
         if !std::process::Command::new("iperf3")
             .args([

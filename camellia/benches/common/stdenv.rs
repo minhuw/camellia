@@ -2,7 +2,7 @@ use std::net::{IpAddr, Ipv4Addr};
 
 use anyhow::Result;
 
-use crate::common::{veth::{VethPair, VethDeviceBuilder}, netns::NetNs};
+use crate::{common::{veth::{VethPair, VethDeviceBuilder}, netns::NetNs}, veth::{set_promiscuous, set_rps_cores}};
 
 
 pub fn setup_veth() -> Result<(VethPair, VethPair)> {
@@ -23,7 +23,7 @@ pub fn setup_veth() -> Result<(VethPair, VethPair)> {
     let right_device = VethDeviceBuilder::new("forward-right")
         .mac_addr([0x38, 0x7e, 0x58, 0xe7, 0x87, 0x2c].into())
         .ip_addr(IpAddr::V4(Ipv4Addr::new(192, 168, 12, 2)), 24)
-        .namespace(forward_netns);
+        .namespace(forward_netns.clone());
 
     let server_device = VethDeviceBuilder::new("test-right")
         .mac_addr([0x38, 0x7e, 0x58, 0xe7, 0x87, 0x2d].into())
@@ -43,6 +43,8 @@ pub fn setup_veth() -> Result<(VethPair, VethPair)> {
             .unwrap();
 
         client_exec_handle.wait().unwrap();
+
+        set_rps_cores(left_pair.left.name.as_str(), &[0]);
     }
 
     {
@@ -55,6 +57,16 @@ pub fn setup_veth() -> Result<(VethPair, VethPair)> {
             .unwrap();
 
         right_exec_handle.wait().unwrap();
+
+        set_rps_cores(right_pair.right.name.as_str(), &[2]);
+    }
+
+    {
+        let _guard = forward_netns.enter().unwrap();
+        set_promiscuous(left_pair.right.name.as_str());
+        set_promiscuous(right_pair.left.name.as_str());
+        set_rps_cores(left_pair.right.name.as_str(), &[1]);
+        set_rps_cores(right_pair.left.name.as_str(), &[1]);
     }
 
     Ok((left_pair, right_pair))

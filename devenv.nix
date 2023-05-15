@@ -20,6 +20,7 @@ in {
       rustup
       strace
       openssh
+      pkgconfig
       which
       zlib
     ] ++ [ iperf3 ethtool pkgs.linuxPackages_latest.perf ];

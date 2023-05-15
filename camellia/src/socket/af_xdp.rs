@@ -481,7 +481,14 @@ where
                     MSG_DONTWAIT,
                     std::ptr::null(),
                     0,
-                ))?;
+                ))
+                .or_else(|err| {
+                    if err == Errno::EAGAIN {
+                        Ok(0)
+                    } else {
+                        Err(err)
+                    }
+                })?;
             }
         }
 

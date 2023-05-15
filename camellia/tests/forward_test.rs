@@ -17,12 +17,6 @@ fn test_packet_forward() {
 
     let veth_pair = stdenv::setup_veth().unwrap();
 
-    {
-        let _left_ns_guard = veth_pair.0.right.namespace.enter().unwrap();
-        veth::set_promiscuous(veth_pair.0.right.name.as_str());
-        veth::set_promiscuous(veth_pair.1.left.name.as_str());
-    }
-
     let running = Arc::new(AtomicBool::new(true));
     let ready = Arc::new(AtomicBool::new(false));
     let running_clone = running.clone();
@@ -45,6 +39,8 @@ fn test_packet_forward() {
     let mac_address_server = veth_pair.1.right.mac_addr.clone();
 
     let handle = std::thread::spawn(move || {
+        core_affinity::set_for_current(core_affinity::CoreId { id: 1 });
+
         let _guard = forward_namespace_clone.enter().unwrap();
 
         let umem = Arc::new(Mutex::new(
@@ -149,6 +145,7 @@ fn test_packet_forward() {
     while !ready.load(std::sync::atomic::Ordering::SeqCst) {}
 
     let server_handle = std::thread::spawn(move || {
+        core_affinity::set_for_current(core_affinity::CoreId { id: 2 });
         let _guard = server_namespace.enter().unwrap();
 
         std::process::Command::new("iperf3")
@@ -158,6 +155,7 @@ fn test_packet_forward() {
     });
 
     let client_handle = std::thread::spawn(move || {
+        core_affinity::set_for_current(core_affinity::CoreId { id: 0 });
         std::thread::sleep(Duration::from_secs(1));
         let _guard = client_namespace.enter().unwrap();
 
