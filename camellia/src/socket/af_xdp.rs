@@ -241,8 +241,8 @@ where
         const SO_BUSY_POLL_BUDGET: c_int = 70;
 
         let enable: c_int = 1;
-        let busy_poll_duration: c_int = 20;
-        let busy_poll_budget: c_int = 32;
+        let busy_poll_duration: c_int = 10;
+        let busy_poll_budget: c_int = 16;
 
         unsafe {
             Errno::result(libc::setsockopt(

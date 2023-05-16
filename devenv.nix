@@ -20,6 +20,7 @@ in {
       python3
       rustup
       strace
+      tokei
       openssh
       pkgconfig
       which

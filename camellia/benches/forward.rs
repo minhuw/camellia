@@ -29,7 +29,7 @@ fn prepare_env(busy_poll: bool) -> (Arc<NetNs>, Arc<NetNs>, Arc<AtomicBool>, Joi
     let server_namespace = veth_pair.1.right.namespace.clone();
 
     let handle = std::thread::spawn(move || {
-        core_affinity::set_for_current(core_affinity::CoreId { id: 1 });
+        core_affinity::set_for_current(core_affinity::CoreId { id: 2 });
 
         let broadcase_address = MacAddr::new([0xff, 0xff, 0xff, 0xff, 0xff, 0xff]);
         let mac_address_client = veth_pair.0.left.mac_addr.clone();
@@ -220,7 +220,7 @@ fn run_iperf(client_ns: &Arc<NetNs>, server_ns: &Arc<NetNs>) {
 
     let handle = {
         std::thread::spawn(move || {
-            core_affinity::set_for_current(core_affinity::CoreId { id: 2 });
+            core_affinity::set_for_current(core_affinity::CoreId { id: 3 });
             let _guarad = server_ns.enter().unwrap();
             if !std::process::Command::new("iperf3")
                 .args(["-s", "-p", "9000", "-1"])
@@ -237,7 +237,7 @@ fn run_iperf(client_ns: &Arc<NetNs>, server_ns: &Arc<NetNs>) {
     std::thread::sleep(Duration::from_secs(1));
 
     {
-        core_affinity::set_for_current(core_affinity::CoreId { id: 0 });
+        core_affinity::set_for_current(core_affinity::CoreId { id: 1 });
         let _guard = client_ns.enter().unwrap();
         if !std::process::Command::new("iperf3")
             .args([

@@ -2,8 +2,13 @@ use std::net::{IpAddr, Ipv4Addr};
 
 use anyhow::Result;
 
-use crate::{common::{veth::{VethPair, VethDeviceBuilder}, netns::NetNs}, veth::{set_promiscuous, set_rps_cores}};
-
+use crate::{
+    common::{
+        netns::NetNs,
+        veth::{VethDeviceBuilder, VethPair},
+    },
+    veth::{set_preferred_busy_polling, set_promiscuous, set_rps_cores},
+};
 
 pub fn setup_veth() -> Result<(VethPair, VethPair)> {
     let client_netns = NetNs::new("client-ns").unwrap();
@@ -67,6 +72,8 @@ pub fn setup_veth() -> Result<(VethPair, VethPair)> {
         set_promiscuous(right_pair.left.name.as_str());
         set_rps_cores(left_pair.right.name.as_str(), &[2]);
         set_rps_cores(right_pair.left.name.as_str(), &[2]);
+        set_preferred_busy_polling(left_pair.right.name.as_str());
+        set_preferred_busy_polling(right_pair.left.name.as_str());
     }
 
     Ok((left_pair, right_pair))

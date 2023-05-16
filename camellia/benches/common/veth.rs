@@ -279,7 +279,7 @@ pub fn set_promiscuous(name: &str) {
     }
 }
 
-pub fn set_rps_cores(name: &str, cores: &[usize]) {
+fn remount_sys() -> Result<tempdir::TempDir> {
     let temp_dir = tempdir::TempDir::new("ns_sys").unwrap();
     Command::new("mount")
         .args([
@@ -288,11 +288,14 @@ pub fn set_rps_cores(name: &str, cores: &[usize]) {
             "none",
             temp_dir.path().as_os_str().to_str().unwrap(),
         ])
-        .spawn()
-        .unwrap()
-        .wait()
-        .unwrap();
+        .spawn()?
+        .wait()?;
 
+    Ok(temp_dir)
+}
+
+pub fn set_rps_cores(name: &str, cores: &[usize]) {
+    let temp_dir = remount_sys().unwrap();
     let sys_path = format!("{}/class/net/{}/queues", temp_dir.path().display(), name);
 
     println!("set_rps_cores: sys_path={}", sys_path);
@@ -316,6 +319,29 @@ pub fn set_rps_cores(name: &str, cores: &[usize]) {
             std::fs::write(file, format!("{:x}", bitmap)).unwrap();
         }
     }
+}
+
+pub fn set_preferred_busy_polling(name: &str) {
+    let tempdir = remount_sys().unwrap();
+
+    std::fs::write(
+        format!(
+            "{}/class/net/{}/napi_defer_hard_irqs",
+            tempdir.path().display(),
+            name
+        ),
+        "2",
+    )
+    .unwrap();
+    std::fs::write(
+        format!(
+            "{}/class/net/{}/gro_flush_timeout",
+            tempdir.path().display(),
+            name
+        ),
+        "200000",
+    )
+    .unwrap();
 }
 
 pub fn disable_checksum_offload(name: &str) -> Result<()> {
