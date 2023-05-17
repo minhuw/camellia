@@ -1,10 +1,10 @@
-use std::{cell::Ref};
+use std::cell::Ref;
 
 use libxdp_sys::xsk_ring_prod;
 
 use crate::error::CamelliaError;
 
-use self::{frame::{AppFrame, Chunk}};
+use self::frame::{AppFrame, Chunk};
 
 pub mod base;
 pub mod frame;

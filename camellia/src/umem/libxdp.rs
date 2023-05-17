@@ -15,7 +15,7 @@ use nix::poll::{poll, PollFd};
 
 use crate::error::CamelliaError;
 
-use super::{frame::Chunk};
+use super::frame::Chunk;
 
 pub fn populate_fill_ring(
     ring: &mut xsk_ring_prod,
@@ -95,7 +95,6 @@ pub fn wakeup_tx(fd: RawFd) -> Result<(), CamelliaError> {
             0,
         ))
         .or_else(|e| match e {
-            // not a 
             Errno::EAGAIN | Errno::EBUSY | Errno::ENETDOWN | Errno::ENOBUFS => Ok(0),
             _ => Err(e),
         })?;

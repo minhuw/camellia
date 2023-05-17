@@ -14,10 +14,7 @@ use common::veth::MacAddr;
 pub use common::*;
 use nix::sys::epoll::{self, EpollEvent};
 
-#[test]
-fn test_packet_forward() {
-    env_logger::init();
-
+fn packet_forward(epoll: bool, busy_polling: bool) {
     let veth_pair = stdenv::setup_veth().unwrap();
 
     let running = Arc::new(AtomicBool::new(true));
@@ -26,11 +23,6 @@ fn test_packet_forward() {
     let running_clone_secondary = running.clone();
 
     let ready_clone = ready.clone();
-
-    ctrlc::set_handler(move || {
-        running.store(false, std::sync::atomic::Ordering::SeqCst);
-    })
-    .unwrap();
 
     let client_namespace = veth_pair.0.left.namespace.clone();
     let server_namespace = veth_pair.1.right.namespace.clone();
@@ -48,28 +40,33 @@ fn test_packet_forward() {
             UMemBuilder::new().num_chunks(16384).build().unwrap(),
         ));
 
-        let mut left_socket = XskSocketBuilder::<SharedAccessor>::new()
+        let mut left_socket_builder = XskSocketBuilder::<SharedAccessor>::new()
             .ifname("forward-left")
             .queue_index(0)
             .with_umem(umem.clone())
-            .enable_cooperate_schedule()
-            .enable_busy_polling()
-            .build_shared()
-            .unwrap();
+            .enable_cooperate_schedule();
 
-        let mut right_socket = XskSocketBuilder::<SharedAccessor>::new()
+        if busy_polling {
+            left_socket_builder = left_socket_builder.enable_busy_polling();
+        }
+
+        let mut left_socket = left_socket_builder.build_shared().unwrap();
+
+        let mut right_socket_builder = XskSocketBuilder::<SharedAccessor>::new()
             .ifname("forward-right")
             .queue_index(0)
             .with_umem(umem)
-            .enable_cooperate_schedule()
-            .enable_busy_polling()
-            .build_shared()
-            .unwrap();
+            .enable_cooperate_schedule();
+
+        if busy_polling {
+            right_socket_builder = right_socket_builder.enable_busy_polling();
+        }
+
+        let mut right_socket = right_socket_builder.build_shared().unwrap();
 
         ready_clone.store(true, std::sync::atomic::Ordering::SeqCst);
-        let busy_poll = true;
 
-        if busy_poll {
+        if !epoll {
             while running_clone.load(std::sync::atomic::Ordering::SeqCst) {
                 let frames = left_socket.recv_bulk(32).unwrap();
                 if frames.len() != 0 {
@@ -274,4 +271,11 @@ fn test_packet_forward() {
     handle.join().unwrap();
 
     // watch_handle.join().unwrap();
+}
+
+#[test]
+fn test_packet_forward_epoll() {
+    packet_forward(true, false);
+    packet_forward(false, false);
+    packet_forward(false, true);
 }

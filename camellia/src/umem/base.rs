@@ -1,5 +1,5 @@
 use std::{
-    cell::{RefCell, Ref},
+    cell::{Ref, RefCell},
     cmp::min,
     collections::HashMap,
     fmt::Display,
@@ -7,9 +7,7 @@ use std::{
     os::{fd::AsRawFd, raw::c_void},
     pin::Pin,
     rc::Rc,
-    sync::{
-        Arc, Mutex,
-    },
+    sync::{Arc, Mutex},
 };
 
 use libxdp_sys::{

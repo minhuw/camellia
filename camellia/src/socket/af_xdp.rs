@@ -8,19 +8,21 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use libbpf_rs::libbpf_sys;
-use libc::SOL_SOCKET;
 use libc::c_int;
 use libc::c_void;
-use libc::{sendto, MSG_DONTWAIT};
+use libc::SOL_SOCKET;
+
+use tracing::Level;
 
 use libxdp_sys::{
     xsk_ring_cons, xsk_ring_cons__peek, xsk_ring_cons__release, xsk_ring_cons__rx_desc,
-    xsk_ring_prod, xsk_ring_prod__needs_wakeup, xsk_ring_prod__reserve, xsk_ring_prod__submit,
-    xsk_ring_prod__tx_desc, xsk_socket, xsk_socket__create, xsk_socket__create_shared,
-    xsk_socket__delete, xsk_socket__fd, xsk_socket_config, xsk_socket_config__bindgen_ty_1,
-    XSK_RING_CONS__DEFAULT_NUM_DESCS, XSK_RING_PROD__DEFAULT_NUM_DESCS,
+    xsk_ring_prod, xsk_ring_prod__reserve, xsk_ring_prod__submit, xsk_ring_prod__tx_desc,
+    xsk_socket, xsk_socket__create, xsk_socket__create_shared, xsk_socket__delete, xsk_socket__fd,
+    xsk_socket_config, xsk_socket_config__bindgen_ty_1, XSK_RING_CONS__DEFAULT_NUM_DESCS,
+    XSK_RING_PROD__DEFAULT_NUM_DESCS,
 };
 use nix::errno::Errno;
+use tracing::event;
 
 use crate::error::CamelliaError;
 use crate::umem::libxdp::need_wakeup;
@@ -290,7 +292,7 @@ impl XskSocketBuilder<DedicatedAccessor> {
             self.queue_index.unwrap(),
             self.umem.unwrap(),
             config,
-            schedule_mode
+            schedule_mode,
         )?;
         if self.busy_polling {
             Self::set_busy_polling(xsk_socket.as_raw_fd())?;
@@ -315,7 +317,7 @@ impl XskSocketBuilder<SharedAccessor> {
             self.queue_index.unwrap(),
             self.umem.unwrap(),
             config,
-            schedule_mode
+            schedule_mode,
         )?;
 
         if self.busy_polling {
@@ -336,7 +338,7 @@ pub struct XskSocket<M: UMemAccessor> {
     umem: M::AccessorRef,
     rx: Pin<Box<RxQueue>>,
     tx: Pin<Box<TxQueue>>,
-    schedule_mode: ScheduleMode
+    schedule_mode: ScheduleMode,
 }
 
 impl XskSocket<SharedAccessor> {
@@ -345,7 +347,7 @@ impl XskSocket<SharedAccessor> {
         queue_index: u32,
         umem: <SharedAccessor as UMemAccessor>::UMemRef,
         config: xsk_socket_config,
-        schedule_mode: ScheduleMode
+        schedule_mode: ScheduleMode,
     ) -> Result<Self, CamelliaError> {
         let mut raw_socket: *mut xsk_socket = std::ptr::null_mut();
         let mut rx_queue = Box::pin(RxQueue::default());
@@ -393,7 +395,7 @@ impl XskSocket<SharedAccessor> {
             umem,
             rx: rx_queue,
             tx: tx_queue,
-            schedule_mode
+            schedule_mode,
         })
     }
 }
@@ -404,7 +406,7 @@ impl XskSocket<DedicatedAccessor> {
         queue_index: u32,
         umem: <DedicatedAccessor as UMemAccessor>::UMemRef,
         config: xsk_socket_config,
-        schedule_mode: ScheduleMode
+        schedule_mode: ScheduleMode,
     ) -> Result<Self, CamelliaError> {
         let mut raw_socket: *mut xsk_socket = std::ptr::null_mut();
         let mut rx_queue = Box::pin(RxQueue::default());
@@ -443,7 +445,7 @@ impl XskSocket<DedicatedAccessor> {
             umem,
             rx: rx_queue,
             tx: tx_queue,
-            schedule_mode
+            schedule_mode,
         })
     }
 }
@@ -501,6 +503,13 @@ where
         if filled < (received as usize) {
             log::warn!("fill failed, filled: {}, received: {}", filled, received);
         }
+
+        event!(
+            Level::TRACE,
+            event = "recv",
+            frames = received,
+            filled = filled
+        );
 
         Ok(frames)
     }
@@ -572,11 +581,9 @@ where
             xsk_ring_prod__submit(&mut self.tx.inner, actual_sent);
         }
 
-        // When cooperate schedule is disabled, we always need to wake up the TX queue
-        // https://lore.kernel.org/bpf/20201130185205.196029-5-bjorn.topel@gmail.com/
-        // But the wakeup flag is set even when XDP_USE_NEED_WAKEUP is not set, so we
-        // happlily always checks the XDP_RING_NEED_WAKEUP flag.
         match self.schedule_mode {
+            // When cooperate schedule is disabled, we always need to wake up the TX queue
+            // https://lore.kernel.org/bpf/20201130185205.196029-5-bjorn.topel@gmail.com/
             ScheduleMode::Legacy | ScheduleMode::BusyPolling => {
                 wakeup_tx(self.as_raw_fd())?;
             }

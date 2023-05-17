@@ -2,7 +2,11 @@ extern crate bindgen;
 use which::which;
 
 use anyhow::{anyhow, Result};
-use std::{env, path::{Path, PathBuf}, process::Command};
+use std::{
+    env,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 fn build_bpftool(out_path: &Path) -> Result<PathBuf> {
     let src_path = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
@@ -44,9 +48,7 @@ fn main() -> anyhow::Result<()> {
 
     let compiler = match cc::Build::new().try_get_compiler() {
         Ok(compiler) => compiler,
-        Err(_) => panic!(
-            "a C compiler is required to compile libxdp-sys"
-        ),
+        Err(_) => panic!("a C compiler is required to compile libxdp-sys"),
     };
 
     let compile_result = Command::new("make")

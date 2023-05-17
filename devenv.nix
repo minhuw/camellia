@@ -30,6 +30,7 @@ in {
   # https://devenv.sh/pre-commit-hooks/
   pre-commit.hooks.shellcheck.enable = true;
   pre-commit.hooks.nixfmt.enable = true;
+  pre-commit.hooks.cargo-check.enable = true;
 
   # From: https://github.com/NixOS/nixpkgs/blob/1fab95f5190d087e66a3502481e34e15d62090aa/pkgs/applications/  networking/browsers/firefox/common.nix#L247-L253
   # Set C flags for Rust's bindgen program. Unlike ordinary C
