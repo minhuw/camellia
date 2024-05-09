@@ -1,9 +1,9 @@
 [workspace]
-
 members = [
     "libxdp-sys",
     "camellia",
 ]
+resolver = "2"
 
 [profile.bench]
 debug = true
@@ -11,3 +11,4 @@ debug = true
 [profile.release-with-debug]
 inherits = "release"
 debug = true
+

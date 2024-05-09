@@ -1,0 +1,35 @@
+<domain type='kvm'>
+    <name>camellia</name>
+    <uuid>7da272e7-dc6b-4169-8e44-0e74885e69cb</uuid>
+    <os>
+        <type>hvm</type>
+        <bootmenu enable='yes' timeout='3000'/>
+        <boot dev='hd'/>
+        <bios useserial='yes' rebootTimeout='0'/>
+    </os>
+    <vcpu>8</vcpu>
+    <memory unit='GiB'>32</memory>
+    <currentMemory unit='GiB'>32</currentMemory>
+    <cpu mode="host-passthrough" migratable="off">
+    </cpu>
+    <on_poweroff>destroy</on_poweroff>
+    <on_reboot>restart</on_reboot>
+    <on_crash>restart</on_crash>
+    <devices>
+        <disk type='file' device='disk'>
+            <driver name='qemu' type='qcow2'/>
+            <source file='/opt/camellia/nixos.qcow2'/>
+            <target dev='hda'/>
+        </disk>
+        <serial type='pty'>
+            <target port='0'/>
+        </serial>
+        <interface type='network'>
+            <source network='default'/>
+            <mac address='72:34:54:dd:f3:25'/>
+        </interface>
+    </devices>
+    <features>
+          <acpi/>
+    </features>
+</domain>
