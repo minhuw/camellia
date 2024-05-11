@@ -9,20 +9,28 @@ use camellia::{
     socket::af_xdp::XskSocketBuilder,
     umem::{base::UMemBuilder, shared::SharedAccessor},
 };
-use common::{netns::NetNs, stdenv::setup_veth, veth::MacAddr};
 use criterion::{criterion_group, criterion_main, Criterion};
 use nix::sys::epoll::{self, EpollEvent};
+use test_utils::{netns::NetNs, stdenv::setup_veth, veth::MacAddr};
 
-mod common;
-pub use common::*;
-
-fn prepare_env(busy_poll: bool) -> (Arc<NetNs>, Arc<NetNs>, Arc<AtomicBool>, JoinHandle<()>) {
+fn prepare_env(
+    epoll: bool,
+    busy_polling: bool,
+) -> (Arc<NetNs>, Arc<NetNs>, Arc<AtomicBool>, JoinHandle<()>) {
+    log::warn!(
+        "set up a {} / {} environment",
+        if epoll { "epoll" } else { "polling" },
+        if busy_polling {
+            "preferred busy polling"
+        } else {
+            "normal busy pulling"
+        }
+    );
     let veth_pair = setup_veth().unwrap();
 
     let running = Arc::new(AtomicBool::new(true));
     let ready = Arc::new(AtomicBool::new(false));
     let running_clone = running.clone();
-
     let ready_clone = ready.clone();
 
     let client_namespace = veth_pair.0.left.namespace.clone();
@@ -41,25 +49,33 @@ fn prepare_env(busy_poll: bool) -> (Arc<NetNs>, Arc<NetNs>, Arc<AtomicBool>, Joi
             UMemBuilder::new().num_chunks(16384).build().unwrap(),
         ));
 
-        let mut left_socket = XskSocketBuilder::<SharedAccessor>::new()
+        let mut left_socket_builder = XskSocketBuilder::<SharedAccessor>::new()
             .ifname("forward-left")
             .queue_index(0)
             .with_umem(umem.clone())
-            .enable_cooperate_schedule()
-            .build_shared()
-            .unwrap();
+            .enable_cooperate_schedule();
 
-        let mut right_socket = XskSocketBuilder::<SharedAccessor>::new()
+        if busy_polling {
+            left_socket_builder = left_socket_builder.enable_busy_polling();
+        }
+        let mut left_socket = left_socket_builder.build_shared().unwrap();
+
+        let mut right_socket_builder = XskSocketBuilder::<SharedAccessor>::new()
             .ifname("forward-right")
             .queue_index(0)
             .with_umem(umem)
-            .enable_cooperate_schedule()
-            .build_shared()
-            .unwrap();
+            .enable_cooperate_schedule();
+
+        if busy_polling {
+            right_socket_builder = right_socket_builder.enable_busy_polling();
+        }
+
+        let mut right_socket = right_socket_builder.build_shared().unwrap();
 
         ready_clone.store(true, std::sync::atomic::Ordering::SeqCst);
 
-        if busy_poll {
+        if !epoll {
+            log::info!("start polling thread");
             while running_clone.load(std::sync::atomic::Ordering::SeqCst) {
                 let frames = left_socket.recv_bulk(32).unwrap();
                 if frames.len() != 0 {
@@ -71,8 +87,6 @@ fn prepare_env(busy_poll: bool) -> (Arc<NetNs>, Arc<NetNs>, Arc<AtomicBool>, Joi
                     .map(|frame| {
                         let (ether_header, _remaining) =
                             etherparse::Ethernet2Header::from_slice(frame.raw_buffer()).unwrap();
-
-                        log::debug!("receive packet from right socket: {:?}", ether_header);
 
                         if ether_header.destination == mac_address_server.bytes()
                             || ether_header.destination == broadcase_address.bytes()
@@ -98,8 +112,6 @@ fn prepare_env(busy_poll: bool) -> (Arc<NetNs>, Arc<NetNs>, Arc<AtomicBool>, Joi
                     .map(|frame| {
                         let (ether_header, _remaining) =
                             etherparse::Ethernet2Header::from_slice(frame.raw_buffer()).unwrap();
-
-                        log::debug!("receive packet from right socket: {:?}", ether_header);
 
                         if ether_header.destination == mac_address_client.bytes()
                             || ether_header.destination == broadcase_address.bytes()
@@ -142,14 +154,10 @@ fn prepare_env(busy_poll: bool) -> (Arc<NetNs>, Arc<NetNs>, Arc<AtomicBool>, Joi
 
             while running_clone.load(std::sync::atomic::Ordering::SeqCst) {
                 let num_events = epoll::epoll_wait(epfd, &mut events, timeout_ms).unwrap();
-
                 for i in 0..num_events {
                     let fd = events[i].data() as i32;
                     if fd == left_socket.as_raw_fd() {
                         let frames = left_socket.recv_bulk(32).unwrap();
-                        if frames.len() != 0 {
-                            log::debug!("receive {} frames from left socket", frames.len());
-                        }
 
                         let frames: Vec<_> = frames
                             .into_iter()
@@ -157,8 +165,6 @@ fn prepare_env(busy_poll: bool) -> (Arc<NetNs>, Arc<NetNs>, Arc<AtomicBool>, Joi
                                 let (ether_header, _remaining) =
                                     etherparse::Ethernet2Header::from_slice(frame.raw_buffer())
                                         .unwrap();
-
-                                log::debug!("receive packet from right socket: {:?}", ether_header);
 
                                 if ether_header.destination == mac_address_server.bytes()
                                     || ether_header.destination == broadcase_address.bytes()
@@ -175,18 +181,12 @@ fn prepare_env(busy_poll: bool) -> (Arc<NetNs>, Arc<NetNs>, Arc<AtomicBool>, Joi
                         assert_eq!(remaining.len(), 0);
                     } else if fd == right_socket.as_raw_fd() {
                         let frames = right_socket.recv_bulk(32).unwrap();
-                        if frames.len() != 0 {
-                            log::debug!("receive {} frames from right socket", frames.len());
-                        }
-
                         let frames: Vec<_> = frames
                             .into_iter()
                             .map(|frame| {
                                 let (ether_header, _remaining) =
                                     etherparse::Ethernet2Header::from_slice(frame.raw_buffer())
                                         .unwrap();
-
-                                log::debug!("receive packet from right socket: {:?}", ether_header);
 
                                 if ether_header.destination == mac_address_client.bytes()
                                     || ether_header.destination == broadcase_address.bytes()
@@ -215,56 +215,57 @@ fn prepare_env(busy_poll: bool) -> (Arc<NetNs>, Arc<NetNs>, Arc<AtomicBool>, Joi
 }
 
 fn run_iperf(client_ns: &Arc<NetNs>, server_ns: &Arc<NetNs>) {
+    println!("run iperf!");
     let client_ns = client_ns.clone();
     let server_ns = server_ns.clone();
 
-    let handle = {
+    let client_handle = {
         std::thread::spawn(move || {
             core_affinity::set_for_current(core_affinity::CoreId { id: 3 });
             let _guarad = server_ns.enter().unwrap();
-            if !std::process::Command::new("iperf3")
-                .args(["-s", "-p", "9000", "-1"])
-                .output()
-                .unwrap()
-                .status
-                .success()
-            {
+            let mut output = std::process::Command::new("iperf3")
+                .args(["-s", "-1"])
+                .spawn()
+                .unwrap();
+
+            if !output.wait().unwrap().success() {
                 panic!("failed to run iperf3 server");
-            }
+            };
         })
     };
 
     std::thread::sleep(Duration::from_secs(1));
 
-    {
+    let server_handle = std::thread::spawn(move || {
         core_affinity::set_for_current(core_affinity::CoreId { id: 1 });
         let _guard = client_ns.enter().unwrap();
-        if !std::process::Command::new("iperf3")
+        let mut output = std::process::Command::new("iperf3")
             .args([
                 "-c",
                 "192.168.12.1",
-                "-p",
-                "9000",
-                "-n",
-                "1024M",
-                "-J",
+                // "-n",
+                // "1024M",
+                // "-J",
+                "-t",
+                "10",
                 "-C",
                 "reno",
             ])
-            .output()
-            .unwrap()
-            .status
-            .success()
-        {
-            panic!("failed to run iperf3 client");
-        }
-    }
+            .spawn()
+            .unwrap();
 
-    handle.join().unwrap();
+        if !output.wait().unwrap().success() {
+            panic!("failed to run iperf3 client");
+        };
+    });
+
+    client_handle.join().unwrap();
+    server_handle.join().unwrap();
 }
 
 fn busypoll_benchmark(c: &mut Criterion) {
-    let (client_ns, server_ns, stop_signal, handle) = prepare_env(true);
+    let (client_ns, server_ns, stop_signal, handle) = prepare_env(false, true);
+    println!("set up the benchmark environment successfully");
 
     let mut group = c.benchmark_group("Bandwidth");
     group.sample_size(10).bench_function("busy polling", |b| {
@@ -278,7 +279,8 @@ fn busypoll_benchmark(c: &mut Criterion) {
 }
 
 fn epoll_benchmark(c: &mut Criterion) {
-    let (client_ns, server_ns, stop_signal, handle) = prepare_env(false);
+    let (client_ns, server_ns, stop_signal, handle) = prepare_env(false, false);
+    println!("set up the benchmark environment successfully");
 
     let mut group = c.benchmark_group("Bandwidth");
     group

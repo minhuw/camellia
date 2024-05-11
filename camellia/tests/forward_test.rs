@@ -9,10 +9,8 @@ use camellia::{
     umem::{base::UMemBuilder, shared::SharedAccessor},
 };
 
-mod common;
-use common::veth::MacAddr;
-pub use common::*;
 use nix::sys::epoll::{self, EpollEvent};
+use test_utils::{stdenv, veth::MacAddr};
 
 fn packet_forward(epoll: bool, busy_polling: bool) {
     let veth_pair = stdenv::setup_veth().unwrap();
@@ -37,7 +35,7 @@ fn packet_forward(epoll: bool, busy_polling: bool) {
         let _guard = veth_pair.0.right.namespace.enter().unwrap();
 
         let umem = Arc::new(Mutex::new(
-            UMemBuilder::new().num_chunks(16384).build().unwrap(),
+            UMemBuilder::new().num_chunks(16384 * 16).build().unwrap(),
         ));
 
         let mut left_socket_builder = XskSocketBuilder::<SharedAccessor>::new()

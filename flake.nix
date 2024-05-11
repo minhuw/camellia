@@ -40,6 +40,7 @@
           buildInputs = [
             pkg-config
             elfutils
+            ethtool
             libcap
             libpcap
             llvmPackages_15.clangUseLLVM
@@ -48,6 +49,7 @@
             rust-bin.stable.latest.default
             m4
             zlib
+            iperf3
             nixfmt-rfc-style
           ];
 

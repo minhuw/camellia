@@ -3,11 +3,9 @@ use std::net::{IpAddr, Ipv4Addr};
 use anyhow::Result;
 
 use crate::{
-    common::{
-        netns::NetNs,
-        veth::{VethDeviceBuilder, VethPair},
-    },
+    netns::NetNs,
     veth::{set_preferred_busy_polling, set_promiscuous, set_rps_cores},
+    veth::{VethDeviceBuilder, VethPair},
 };
 
 pub fn setup_veth() -> Result<(VethPair, VethPair)> {

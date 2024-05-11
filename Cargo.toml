@@ -2,13 +2,7 @@
 members = [
     "libxdp-sys",
     "camellia",
+    "test-utils"
 ]
 resolver = "2"
-
-[profile.bench]
-debug = true
-
-[profile.release-with-debug]
-inherits = "release"
-debug = true
 

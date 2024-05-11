@@ -37,6 +37,7 @@
 
   environment.systemPackages = with pkgs; [
     chezmoi
+    ethtool
     fish
     git
     starship

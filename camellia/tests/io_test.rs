@@ -11,12 +11,9 @@ use camellia::{
         frame::AppFrame,
     },
 };
-use common::veth::{VethDeviceBuilder, VethPair};
 use etherparse::PacketBuilder;
 use std::thread::sleep;
-
-mod common;
-pub use common::*;
+use test_utils::veth::{VethDeviceBuilder, VethPair};
 
 fn setup_veth() -> VethPair {
     let left_device = VethDeviceBuilder::new("test-left")
