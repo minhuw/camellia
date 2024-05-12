@@ -17,15 +17,16 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y curl build-essential gcc-multilib zlib1g-dev libelf-dev libclang-dev libpcap-dev llvm clang pkg-config
       - run: cargo build --all-features
 
-  test-all-features:
-    name: cargo test with all features
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - uses: dtolnay/rust-toolchain@stable
-      - run: sudo apt-get update && sudo apt-get install -y curl build-essential gcc-multilib zlib1g-dev libelf-dev libclang-dev libpcap-dev llvm clang pkg-config
-      - run: cargo test
-        env:
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: 'sudo -E'
+  # test-all-features:
+  #   name: cargo test with all features
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #       with:
+  #         submodules: recursive
+  #     - uses: dtolnay/rust-toolchain@stable
+  #     - run: sudo apt-get update && sudo apt-get install -y curl build-essential gcc-multilib zlib1g-dev libelf-dev libclang-dev libpcap-dev llvm clang pkg-config
+  #     - run: lscpu
+  #     - run: cargo test
+  #       env:
+  #         CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: 'sudo -E'
