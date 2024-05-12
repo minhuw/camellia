@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::cmp::min;
 use std::ffi::CString;
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
 use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -237,7 +237,7 @@ where
         self
     }
 
-    pub fn set_busy_polling(raw_fd: i32) -> Result<(), CamelliaError> {
+    pub fn set_busy_polling(fd: BorrowedFd) -> Result<(), CamelliaError> {
         // libc and nix don't give us these two setsockopt options yet
         const SO_PREFER_BUSY_POLL: c_int = 69;
         const SO_BUSY_POLL_BUDGET: c_int = 70;
@@ -248,7 +248,7 @@ where
 
         unsafe {
             Errno::result(libc::setsockopt(
-                raw_fd,
+                fd.as_raw_fd(),
                 SOL_SOCKET,
                 SO_PREFER_BUSY_POLL,
                 &enable as *const c_int as *const c_void,
@@ -256,7 +256,7 @@ where
             ))?;
 
             Errno::result(libc::setsockopt(
-                raw_fd,
+                fd.as_raw_fd(),
                 SOL_SOCKET,
                 libc::SO_BUSY_POLL,
                 &busy_poll_duration as *const c_int as *const c_void,
@@ -264,7 +264,7 @@ where
             ))?;
 
             Errno::result(libc::setsockopt(
-                raw_fd,
+                fd.as_raw_fd(),
                 SOL_SOCKET,
                 SO_BUSY_POLL_BUDGET,
                 &busy_poll_budget as *const c_int as *const c_void,
@@ -295,7 +295,7 @@ impl XskSocketBuilder<DedicatedAccessor> {
             schedule_mode,
         )?;
         if self.busy_polling {
-            Self::set_busy_polling(xsk_socket.as_raw_fd())?;
+            Self::set_busy_polling(xsk_socket.as_fd())?;
         }
         Ok(xsk_socket)
     }
@@ -321,7 +321,7 @@ impl XskSocketBuilder<SharedAccessor> {
         )?;
 
         if self.busy_polling {
-            Self::set_busy_polling(xsk_socket.as_raw_fd())?;
+            Self::set_busy_polling(xsk_socket.as_fd())?;
         }
         Ok(xsk_socket)
     }
@@ -376,7 +376,7 @@ impl XskSocket<SharedAccessor> {
             ) {
                 0 => {}
                 errno => {
-                    return Err(Errno::from_i32(-errno).into());
+                    return Err(Errno::from_raw(-errno).into());
                 }
             }
         }
@@ -431,7 +431,7 @@ impl XskSocket<DedicatedAccessor> {
             ) {
                 0 => {}
                 errno => {
-                    return Err(Errno::from_i32(-errno).into());
+                    return Err(Errno::from_raw(-errno).into());
                 }
             }
         }
@@ -470,11 +470,11 @@ where
             match self.schedule_mode {
                 ScheduleMode::Cooperative | ScheduleMode::Legacy => {
                     if need_wakeup(&M::fill_inner(&self.umem)) {
-                        wakeup_rx(self.as_raw_fd())?;
+                        wakeup_rx(self.as_fd())?;
                     }
                 }
                 ScheduleMode::BusyPolling => {
-                    wakeup_rx(self.as_raw_fd())?;
+                    wakeup_rx(self.as_fd())?;
                 }
             }
         }
@@ -585,11 +585,11 @@ where
             // When cooperate schedule is disabled, we always need to wake up the TX queue
             // https://lore.kernel.org/bpf/20201130185205.196029-5-bjorn.topel@gmail.com/
             ScheduleMode::Legacy | ScheduleMode::BusyPolling => {
-                wakeup_tx(self.as_raw_fd())?;
+                wakeup_tx(self.as_fd())?;
             }
             ScheduleMode::Cooperative => {
                 if need_wakeup(&self.tx.inner) {
-                    wakeup_tx(self.as_raw_fd())?;
+                    wakeup_tx(self.as_fd())?;
                 }
             }
         }
@@ -607,11 +607,11 @@ where
     }
 }
 
-impl<M> AsRawFd for XskSocket<M>
+impl<M> AsFd for XskSocket<M>
 where
     M: UMemAccessor,
 {
-    fn as_raw_fd(&self) -> std::os::fd::RawFd {
-        unsafe { xsk_socket__fd(self.inner) }
+    fn as_fd(&self) -> BorrowedFd {
+        unsafe { BorrowedFd::borrow_raw(xsk_socket__fd(self.inner)) }
     }
 }

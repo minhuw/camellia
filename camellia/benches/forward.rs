@@ -1,5 +1,5 @@
 use std::{
-    os::fd::AsRawFd,
+    os::fd::{AsFd, AsRawFd},
     sync::{atomic::AtomicBool, Arc, Mutex},
     thread::JoinHandle,
     time::Duration,
@@ -10,7 +10,7 @@ use camellia::{
     umem::{base::UMemBuilder, shared::SharedAccessor},
 };
 use criterion::{criterion_group, criterion_main, Criterion};
-use nix::sys::epoll::{self, EpollEvent};
+use nix::sys::epoll::{self, EpollCreateFlags, EpollEvent};
 use test_utils::{netns::NetNs, stdenv::setup_veth, veth::MacAddr};
 
 fn prepare_env(
@@ -128,35 +128,28 @@ fn prepare_env(
                 assert_eq!(remaining.len(), 0);
             }
         } else {
-            let mut left_event =
-                epoll::EpollEvent::new(epoll::EpollFlags::EPOLLIN, left_socket.as_raw_fd() as u64);
-            let mut right_event =
-                epoll::EpollEvent::new(epoll::EpollFlags::EPOLLIN, right_socket.as_raw_fd() as u64);
+            let left_event = epoll::EpollEvent::new(
+                epoll::EpollFlags::EPOLLIN,
+                left_socket.as_fd().as_raw_fd() as u64,
+            );
+            let right_event = epoll::EpollEvent::new(
+                epoll::EpollFlags::EPOLLIN,
+                right_socket.as_fd().as_raw_fd() as u64,
+            );
 
-            let epfd = epoll::epoll_create().unwrap();
-            epoll::epoll_ctl(
-                epfd,
-                epoll::EpollOp::EpollCtlAdd,
-                left_socket.as_raw_fd(),
-                Some(&mut left_event),
-            )
-            .unwrap();
-            epoll::epoll_ctl(
-                epfd,
-                epoll::EpollOp::EpollCtlAdd,
-                right_socket.as_raw_fd(),
-                Some(&mut right_event),
-            )
-            .unwrap();
+            let epoll = epoll::Epoll::new(EpollCreateFlags::empty()).unwrap();
+            epoll.add(&left_socket, left_event).unwrap();
+            epoll.add(&right_socket, right_event).unwrap();
 
             let mut events = [EpollEvent::empty(); 100];
-            let timeout_ms = 1000;
+            let timeout_ms: u16 = 1000;
 
             while running_clone.load(std::sync::atomic::Ordering::SeqCst) {
-                let num_events = epoll::epoll_wait(epfd, &mut events, timeout_ms).unwrap();
+                let num_events = epoll.wait(&mut events, timeout_ms).unwrap();
+                // let num_events = epoll::epoll_wait(epfd, &mut events, timeout_ms).unwrap();
                 for i in 0..num_events {
                     let fd = events[i].data() as i32;
-                    if fd == left_socket.as_raw_fd() {
+                    if fd == left_socket.as_fd().as_raw_fd() {
                         let frames = left_socket.recv_bulk(32).unwrap();
 
                         let frames: Vec<_> = frames
@@ -179,7 +172,7 @@ fn prepare_env(
 
                         let remaining = right_socket.send_bulk(frames).unwrap();
                         assert_eq!(remaining.len(), 0);
-                    } else if fd == right_socket.as_raw_fd() {
+                    } else if fd == right_socket.as_fd().as_raw_fd() {
                         let frames = right_socket.recv_bulk(32).unwrap();
                         let frames: Vec<_> = frames
                             .into_iter()
@@ -215,7 +208,6 @@ fn prepare_env(
 }
 
 fn run_iperf(client_ns: &Arc<NetNs>, server_ns: &Arc<NetNs>) {
-    println!("run iperf!");
     let client_ns = client_ns.clone();
     let server_ns = server_ns.clone();
 
@@ -279,7 +271,7 @@ fn busypoll_benchmark(c: &mut Criterion) {
 }
 
 fn epoll_benchmark(c: &mut Criterion) {
-    let (client_ns, server_ns, stop_signal, handle) = prepare_env(false, false);
+    let (client_ns, server_ns, stop_signal, handle) = prepare_env(true, false);
     println!("set up the benchmark environment successfully");
 
     let mut group = c.benchmark_group("Bandwidth");
@@ -293,5 +285,5 @@ fn epoll_benchmark(c: &mut Criterion) {
     handle.join().unwrap();
 }
 
-criterion_group!(benches, busypoll_benchmark, epoll_benchmark);
+criterion_group!(benches, epoll_benchmark, busypoll_benchmark);
 criterion_main!(benches);

@@ -182,7 +182,7 @@ impl UMem {
                 &config,
             ) {
                 0 => {}
-                errno => return Err(Errno::from_i32(-errno).into()),
+                errno => return Err(Errno::from_raw(-errno).into()),
             }
         }
 
@@ -241,7 +241,7 @@ impl Drop for UMem {
     fn drop(&mut self) {
         let errno = unsafe { xsk_umem__delete(self.inner) };
         if errno < 0 {
-            eprintln!("failed to delete xsk umem: {}", Errno::from_i32(-errno));
+            eprintln!("failed to delete xsk umem: {}", Errno::from_raw(-errno));
         }
         let mut locked_memory = LOCKED_IO_MEMORY.lock().unwrap();
         locked_memory.sub_assign(self._num_chunks as u64 * self.chunk_size as u64);

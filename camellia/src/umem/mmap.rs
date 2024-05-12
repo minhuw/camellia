@@ -1,7 +1,7 @@
-use std::num::NonZeroUsize;
-
 use crate::error::CamelliaError;
-use nix::sys::mman::{mmap, munmap, MapFlags, ProtFlags};
+use nix::sys::mman::{mmap_anonymous, munmap, MapFlags, ProtFlags};
+use std::num::NonZeroUsize;
+use std::ptr::NonNull;
 
 #[derive(Debug)]
 pub struct MMapArea {
@@ -17,18 +17,16 @@ impl MMapArea {
             ));
         }
         let mmap_base = unsafe {
-            mmap(
+            mmap_anonymous(
                 None,
                 NonZeroUsize::new_unchecked(size),
                 ProtFlags::PROT_READ | ProtFlags::PROT_WRITE,
                 MapFlags::MAP_SHARED | MapFlags::MAP_ANONYMOUS,
-                -1,
-                0,
             )?
         };
 
         let mmap_area = Self {
-            base_address: mmap_base as usize,
+            base_address: mmap_base.as_ptr() as usize,
             length: size,
         };
 
@@ -42,7 +40,12 @@ impl MMapArea {
 
 impl Drop for MMapArea {
     fn drop(&mut self) {
-        if let Err(e) = unsafe { munmap(self.base_address as *mut std::ffi::c_void, self.length) } {
+        if let Err(e) = unsafe {
+            munmap(
+                NonNull::new(self.base_address as *mut std::ffi::c_void).unwrap(),
+                self.length,
+            )
+        } {
             eprintln!(
                 "unable to munmap memory region (base address: {}, length: {}) due to {}",
                 self.base_address, self.length, e

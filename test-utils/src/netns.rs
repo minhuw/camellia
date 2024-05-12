@@ -270,12 +270,12 @@ impl<E: Env> NetNs<E> {
     /// Requires elevated privileges.
     pub fn enter(&self) -> Result<NetNsGuard<E>> {
         let current_ns = self.env.clone().current().unwrap();
-        setns(self.as_raw_fd(), CloneFlags::CLONE_NEWNET).unwrap();
+        setns(&self.file, CloneFlags::CLONE_NEWNET).unwrap();
         Ok(NetNsGuard { old: current_ns })
     }
 
     fn enter_without_guard(&self) -> Result<()> {
-        setns(self.as_raw_fd(), CloneFlags::CLONE_NEWNET).unwrap();
+        setns(&self.file, CloneFlags::CLONE_NEWNET).unwrap();
         Ok(())
     }
 
@@ -336,6 +336,7 @@ impl NetNs {
     pub fn new<S: AsRef<str>>(ns_name: S) -> Result<std::sync::Arc<Self>> {
         let default_env = std::sync::Arc::new(DefaultEnv);
         default_env.init()?;
+        log::info!("default env is prepared\n");
         Self::new_with_env(ns_name, default_env)
     }
 

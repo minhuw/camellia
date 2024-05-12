@@ -1,7 +1,7 @@
 use std::{
     cmp::min,
     collections::HashMap,
-    os::fd::{AsRawFd, RawFd},
+    os::fd::{AsRawFd, BorrowedFd},
 };
 
 use libc::{recvfrom, sendto, MSG_DONTWAIT};
@@ -10,8 +10,8 @@ use libxdp_sys::{
     xsk_ring_prod, xsk_ring_prod__fill_addr, xsk_ring_prod__needs_wakeup, xsk_ring_prod__reserve,
     xsk_ring_prod__submit,
 };
-use nix::errno::Errno;
 use nix::poll::{poll, PollFd};
+use nix::{errno::Errno, poll::PollTimeout};
 
 use crate::error::CamelliaError;
 
@@ -66,7 +66,7 @@ pub fn recycle_compeletion_ring(
     completed as usize
 }
 
-pub fn wakeup_rx(fd: RawFd) -> Result<(), CamelliaError> {
+pub fn wakeup_rx(fd: BorrowedFd) -> Result<(), CamelliaError> {
     unsafe {
         Errno::result(recvfrom(
             fd.as_raw_fd(),
@@ -84,7 +84,7 @@ pub fn need_wakeup(ring: &xsk_ring_prod) -> bool {
     unsafe { xsk_ring_prod__needs_wakeup(ring) != 0 }
 }
 
-pub fn wakeup_tx(fd: RawFd) -> Result<(), CamelliaError> {
+pub fn wakeup_tx(fd: BorrowedFd) -> Result<(), CamelliaError> {
     unsafe {
         Errno::result(sendto(
             fd.as_raw_fd(),
@@ -102,15 +102,15 @@ pub fn wakeup_tx(fd: RawFd) -> Result<(), CamelliaError> {
     Ok(())
 }
 
-pub fn wakeup_rxtx(fd: RawFd) -> Result<(), CamelliaError> {
+pub fn wakeup_rxtx(fd: BorrowedFd) -> Result<(), CamelliaError> {
     let mut fds = [PollFd::new(fd, nix::poll::PollFlags::POLLOUT)];
-    poll(&mut fds, 0)?;
+    poll(&mut fds, PollTimeout::ZERO)?;
     Ok(())
 }
 
 pub fn wakeup_fill_if_necessary(
     ring: &mut xsk_ring_prod,
-    xsk_fd: RawFd,
+    xsk_fd: BorrowedFd,
 ) -> Result<(), CamelliaError> {
     unsafe {
         if xsk_ring_prod__needs_wakeup(ring) != 0 {
@@ -122,7 +122,7 @@ pub fn wakeup_fill_if_necessary(
 
 pub fn wakeup_tx_if_necessary(
     ring: &mut xsk_ring_prod,
-    xsk_fd: RawFd,
+    xsk_fd: BorrowedFd,
 ) -> Result<(), CamelliaError> {
     unsafe {
         if xsk_ring_prod__needs_wakeup(ring) != 0 {

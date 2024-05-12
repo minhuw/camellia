@@ -1,5 +1,5 @@
 use std::{
-    os::fd::AsRawFd,
+    os::fd::{AsFd, AsRawFd},
     sync::{atomic::AtomicBool, Arc, Mutex},
     time::Duration,
 };
@@ -9,7 +9,7 @@ use camellia::{
     umem::{base::UMemBuilder, shared::SharedAccessor},
 };
 
-use nix::sys::epoll::{self, EpollEvent};
+use nix::sys::epoll::{self, EpollCreateFlags, EpollEvent};
 use test_utils::{stdenv, veth::MacAddr};
 
 fn packet_forward(epoll: bool, busy_polling: bool) {
@@ -121,40 +121,28 @@ fn packet_forward(epoll: bool, busy_polling: bool) {
                 assert_eq!(remaining.len(), 0);
             }
         } else {
-            let mut left_event =
-                epoll::EpollEvent::new(epoll::EpollFlags::EPOLLIN, left_socket.as_raw_fd() as u64);
-            let mut right_event =
-                epoll::EpollEvent::new(epoll::EpollFlags::EPOLLIN, right_socket.as_raw_fd() as u64);
+            let left_event = epoll::EpollEvent::new(
+                epoll::EpollFlags::EPOLLIN,
+                left_socket.as_fd().as_raw_fd() as u64,
+            );
+            let right_event = epoll::EpollEvent::new(
+                epoll::EpollFlags::EPOLLIN,
+                right_socket.as_fd().as_raw_fd() as u64,
+            );
 
-            let epfd = epoll::epoll_create().unwrap();
-            epoll::epoll_ctl(
-                epfd,
-                epoll::EpollOp::EpollCtlAdd,
-                left_socket.as_raw_fd(),
-                Some(&mut left_event),
-            )
-            .unwrap();
-            epoll::epoll_ctl(
-                epfd,
-                epoll::EpollOp::EpollCtlAdd,
-                right_socket.as_raw_fd(),
-                Some(&mut right_event),
-            )
-            .unwrap();
+            let epoll = epoll::Epoll::new(EpollCreateFlags::empty()).unwrap();
+            epoll.add(&left_socket, left_event).unwrap();
+            epoll.add(&right_socket, right_event).unwrap();
 
             let mut events = [EpollEvent::empty(); 100];
-            let timeout_ms: isize = 1000;
+            let timeout_ms: u16 = 1000;
 
             while running_clone.load(std::sync::atomic::Ordering::SeqCst) {
-                let num_events = epoll::epoll_wait(epfd, &mut events, timeout_ms).unwrap();
-
-                if num_events > 0 {
-                    log::debug!("receive {} events", num_events);
-                }
+                let num_events = epoll.wait(&mut events, timeout_ms).unwrap();
 
                 for i in 0..num_events {
                     let fd = events[i].data() as i32;
-                    if fd == left_socket.as_raw_fd() {
+                    if fd == left_socket.as_fd().as_raw_fd() {
                         let frames = left_socket.recv_bulk(32).unwrap();
                         if frames.len() != 0 {
                             log::debug!("receive {} frames from left socket", frames.len());
@@ -182,7 +170,7 @@ fn packet_forward(epoll: bool, busy_polling: bool) {
 
                         let remaining = right_socket.send_bulk(frames).unwrap();
                         assert_eq!(remaining.len(), 0);
-                    } else if fd == right_socket.as_raw_fd() {
+                    } else if fd == right_socket.as_fd().as_raw_fd() {
                         let frames = right_socket.recv_bulk(32).unwrap();
                         if frames.len() != 0 {
                             log::debug!("receive {} frames from right socket", frames.len());
@@ -272,7 +260,7 @@ fn packet_forward(epoll: bool, busy_polling: bool) {
 }
 
 #[test]
-fn test_packet_forward_epoll() {
+fn test_packet_forward() {
     packet_forward(true, false);
     packet_forward(false, false);
     packet_forward(false, true);

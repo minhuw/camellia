@@ -11,7 +11,7 @@ use camellia::{
         frame::AppFrame,
     },
 };
-use etherparse::PacketBuilder;
+use etherparse::{IpNumber, PacketBuilder};
 use std::thread::sleep;
 use test_utils::veth::{VethDeviceBuilder, VethPair};
 
@@ -42,7 +42,7 @@ fn build_a_packet(
 
     {
         let mut buffer = frame.raw_buffer_append(max(packet_size, 64)).unwrap();
-        builder.write(&mut buffer, 0, payload).unwrap();
+        builder.write(&mut buffer, IpNumber::TCP, payload).unwrap();
     }
 
     frame
