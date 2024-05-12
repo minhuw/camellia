@@ -1,4 +1,3 @@
-use bindgen::CargoCallbacks;
 use which::which;
 
 use anyhow::{anyhow, Result};
@@ -121,7 +120,7 @@ fn main() -> anyhow::Result<()> {
         .header("wrapper.h")
         .generate_inline_functions(true)
         .clang_arg(format!("-I{}", include_path.display()))
-        .parse_callbacks(Box::new(CargoCallbacks::new()))
+        .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         .generate()
         .expect("unable to generate bindings");
 
