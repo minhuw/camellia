@@ -28,7 +28,3 @@ libbpf-cargo = "0.20.1"
 [dev-dependencies]
 core_affinity = "0.8.0"
 test-utils = { path = "../test-utils" }
-
-[[bench]]
-name = "forward"
-harness = false

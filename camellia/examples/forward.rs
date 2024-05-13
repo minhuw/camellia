@@ -9,7 +9,6 @@ use camellia::{
     socket::af_xdp::XskSocketBuilder,
     umem::{base::UMemBuilder, shared::SharedAccessor},
 };
-use criterion::{criterion_group, criterion_main, Criterion};
 use nix::sys::epoll::{self, EpollCreateFlags, EpollEvent};
 use test_utils::{netns::NetNs, stdenv::setup_veth, veth::MacAddr};
 
@@ -127,6 +126,7 @@ fn prepare_env(
                 let remaining = left_socket.send_bulk(frames).unwrap();
                 assert_eq!(remaining.len(), 0);
             }
+            println!("forward thread exits normally");
         } else {
             let left_event = epoll::EpollEvent::new(
                 epoll::EpollFlags::EPOLLIN,
@@ -215,8 +215,8 @@ fn run_iperf(client_ns: &Arc<NetNs>, server_ns: &Arc<NetNs>) {
         std::thread::spawn(move || {
             core_affinity::set_for_current(core_affinity::CoreId { id: 3 });
             let _guarad = server_ns.enter().unwrap();
-            let output = std::process::Command::new("iperf3")
-                .args(["-s", "-1"])
+            let output = std::process::Command::new("taskset")
+                .args(["-c", "3", "iperf3", "-s", "-1"])
                 .output()
                 .unwrap();
 
@@ -231,8 +231,20 @@ fn run_iperf(client_ns: &Arc<NetNs>, server_ns: &Arc<NetNs>) {
     let server_handle = std::thread::spawn(move || {
         core_affinity::set_for_current(core_affinity::CoreId { id: 1 });
         let _guard = client_ns.enter().unwrap();
-        let mut output = std::process::Command::new("iperf3")
-            .args(["-c", "192.168.12.1", "-n", "1024M", "-J", "-C", "reno"])
+        let mut output = std::process::Command::new("taskset")
+            .args([
+                "-c",
+                "1",
+                "iperf3",
+                "-c",
+                "192.168.12.1",
+                // "-n",
+                // "4096M",
+                "-t",
+                "10",
+                "-C",
+                "bbr",
+            ])
             .spawn()
             .unwrap();
 
@@ -245,35 +257,9 @@ fn run_iperf(client_ns: &Arc<NetNs>, server_ns: &Arc<NetNs>) {
     server_handle.join().unwrap();
 }
 
-fn busypoll_benchmark(c: &mut Criterion) {
+fn main() {
     let (client_ns, server_ns, stop_signal, handle) = prepare_env(false, true);
-    println!("set up the benchmark environment successfully");
-
-    let mut group = c.benchmark_group("Bandwidth");
-    group.sample_size(10).bench_function("busy polling", |b| {
-        b.iter(|| run_iperf(&client_ns, &server_ns))
-    });
-
-    group.finish();
-
+    run_iperf(&client_ns, &server_ns);
     stop_signal.store(false, std::sync::atomic::Ordering::SeqCst);
     handle.join().unwrap();
 }
-
-fn epoll_benchmark(c: &mut Criterion) {
-    let (client_ns, server_ns, stop_signal, handle) = prepare_env(true, false);
-    println!("set up the benchmark environment successfully");
-
-    let mut group = c.benchmark_group("Bandwidth");
-    group
-        .sample_size(10)
-        .bench_function("epoll", |b| b.iter(|| run_iperf(&client_ns, &server_ns)));
-
-    group.finish();
-
-    stop_signal.store(false, std::sync::atomic::Ordering::SeqCst);
-    handle.join().unwrap();
-}
-
-criterion_group!(benches, epoll_benchmark, busypoll_benchmark);
-criterion_main!(benches);
