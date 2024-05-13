@@ -5,13 +5,15 @@
 ## Build
 
 ```shell
+git submodule update --init --recursive
 cargo build
 cargo test
 cargo bench
 ```
 
-## Generate Flamegraph
+## Examples and Flamegraph
 
 ```shell
+cargo run --example forward
 cargo flamegraph --root --example forward
 ```

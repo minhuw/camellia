@@ -33,17 +33,16 @@
     git
     starship
     nil
+    direnv
     neovim
+    vim
     linuxPackages_latest.perf
     python3
     tcpdump
+    bpftools
+    bpftrace
     htop
   ];
 
-  systemd.network.links = {
-    virtual = {
-      matchConfig = { Driver = "veth"; };
-      linkConfig = { MACAddressPolicy = "none"; };
-    };
-  };
+  services.udev.enable = false;
 }

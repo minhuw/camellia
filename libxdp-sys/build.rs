@@ -54,7 +54,7 @@ fn main() -> anyhow::Result<()> {
         .arg("libxdp")
         .env("BPFTOOL", bpftool)
         .env("CC", compiler.path())
-        // .env("CFLAGS", compiler.cflags_env())
+        .env("CFLAGS", compiler.cflags_env())
         .current_dir(src_path.join("xdp-tools"))
         .output()?;
 
@@ -120,7 +120,6 @@ fn main() -> anyhow::Result<()> {
         .header("wrapper.h")
         .generate_inline_functions(true)
         .clang_arg(format!("-I{}", include_path.display()))
-        .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         .generate()
         .expect("unable to generate bindings");
 

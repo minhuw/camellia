@@ -29,16 +29,25 @@
       {
         colmena = {
           meta = {
-            nixpkgs = import nixpkgs {
-              system = "x86_64-linux";
-              overlays = [ ];
+            nixpkgs = import nixpkgs { inherit system overlays; };
+          };
+
+          testbed = {
+            deployment = {
+              targetHost = "127.0.0.1";
             };
+            imports = [
+              ./nix/configuration.nix
+            ];
           };
         };
 
         devShells.default = mkShell {
           buildInputs = [
+            colmena
             pkg-config
+            bpftools
+            bpftrace
             elfutils
             ethtool
             libcap
