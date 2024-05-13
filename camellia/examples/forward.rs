@@ -9,7 +9,13 @@ use camellia::{
     socket::af_xdp::XskSocketBuilder,
     umem::{base::UMemBuilder, shared::SharedAccessor},
 };
-use nix::sys::epoll::{self, EpollCreateFlags, EpollEvent};
+use nix::{
+    sys::{
+        epoll::{self, EpollCreateFlags, EpollEvent},
+        signal::{self, Signal},
+    },
+    unistd::{sleep, Pid},
+};
 use test_utils::{netns::NetNs, stdenv::setup_veth, veth::MacAddr};
 
 fn prepare_env(
@@ -70,16 +76,16 @@ fn prepare_env(
         }
 
         let mut right_socket = right_socket_builder.build_shared().unwrap();
+        let mut total_left_to_right = 0;
+        let mut total_right_to_left = 0;
+        let batch_size = 32;
 
         ready_clone.store(true, std::sync::atomic::Ordering::SeqCst);
 
         if !epoll {
             log::info!("start polling thread");
             while running_clone.load(std::sync::atomic::Ordering::SeqCst) {
-                let frames = left_socket.recv_bulk(32).unwrap();
-                if frames.len() != 0 {
-                    log::debug!("receive {} frames from left socket", frames.len());
-                }
+                let frames = left_socket.recv_bulk(batch_size).unwrap();
 
                 let frames: Vec<_> = frames
                     .into_iter()
@@ -98,10 +104,12 @@ fn prepare_env(
                     .flatten()
                     .collect();
 
+                total_left_to_right += frames.len();
+
                 let remaining = right_socket.send_bulk(frames).unwrap();
                 assert_eq!(remaining.len(), 0);
 
-                let frames = right_socket.recv_bulk(32).unwrap();
+                let frames = right_socket.recv_bulk(batch_size).unwrap();
                 if frames.len() != 0 {
                     log::debug!("receive {} frames from right socket", frames.len());
                 }
@@ -123,10 +131,15 @@ fn prepare_env(
                     .flatten()
                     .collect();
 
+                total_right_to_left += frames.len();
+
                 let remaining = left_socket.send_bulk(frames).unwrap();
                 assert_eq!(remaining.len(), 0);
             }
-            println!("forward thread exits normally");
+            println!(
+                "forward thread exits normally. left=>right: {}, right=>left: {}",
+                total_left_to_right, total_right_to_left
+            );
         } else {
             let left_event = epoll::EpollEvent::new(
                 epoll::EpollFlags::EPOLLIN,
@@ -150,7 +163,7 @@ fn prepare_env(
                 for i in 0..num_events {
                     let fd = events[i].data() as i32;
                     if fd == left_socket.as_fd().as_raw_fd() {
-                        let frames = left_socket.recv_bulk(32).unwrap();
+                        let frames = left_socket.recv_bulk(batch_size).unwrap();
 
                         let frames: Vec<_> = frames
                             .into_iter()
@@ -171,9 +184,9 @@ fn prepare_env(
                             .collect();
 
                         let remaining = right_socket.send_bulk(frames).unwrap();
-                        assert_eq!(remaining.len(), 0);
+                        // assert_eq!(remaining.len(), 0);
                     } else if fd == right_socket.as_fd().as_raw_fd() {
-                        let frames = right_socket.recv_bulk(32).unwrap();
+                        let frames = right_socket.recv_bulk(batch_size).unwrap();
                         let frames: Vec<_> = frames
                             .into_iter()
                             .map(|frame| {
@@ -193,7 +206,7 @@ fn prepare_env(
                             .collect();
 
                         let remaining = left_socket.send_bulk(frames).unwrap();
-                        assert_eq!(remaining.len(), 0);
+                        // assert_eq!(remaining.len(), 0);
                     } else {
                         panic!("unexpected fd: {}", fd);
                     }
@@ -211,26 +224,62 @@ fn run_iperf(client_ns: &Arc<NetNs>, server_ns: &Arc<NetNs>) {
     let client_ns = client_ns.clone();
     let server_ns = server_ns.clone();
 
-    let client_handle = {
-        std::thread::spawn(move || {
-            core_affinity::set_for_current(core_affinity::CoreId { id: 3 });
-            let _guarad = server_ns.enter().unwrap();
-            let output = std::process::Command::new("taskset")
-                .args(["-c", "3", "iperf3", "-s", "-1"])
-                .output()
-                .unwrap();
+    let server_handle = std::thread::spawn(move || {
+        core_affinity::set_for_current(core_affinity::CoreId { id: 3 });
+        let _guarad = server_ns.enter().unwrap();
 
-            if !output.status.success() {
-                panic!("failed to run iperf3 server");
-            };
-        })
-    };
+        let packet_dump = std::process::Command::new("taskset")
+            .args([
+                "-c",
+                "6",
+                "tcpdump",
+                "-i",
+                "test-right",
+                "-w",
+                "server.pcap",
+                "-B",
+                "1048576",
+            ])
+            .spawn()
+            .unwrap();
+
+        sleep(5);
+
+        let output = std::process::Command::new("taskset")
+            .args(["-c", "3", "iperf3", "-p", "9000", "-s", "-1"])
+            .output()
+            .unwrap();
+
+        if !output.status.success() {
+            panic!("failed to run iperf3 server");
+        };
+
+        signal::kill(Pid::from_raw(packet_dump.id() as i32), Signal::SIGINT).unwrap();
+    });
 
     std::thread::sleep(Duration::from_secs(1));
 
-    let server_handle = std::thread::spawn(move || {
+    let client_handle = std::thread::spawn(move || {
         core_affinity::set_for_current(core_affinity::CoreId { id: 1 });
         let _guard = client_ns.enter().unwrap();
+
+        let packet_dump = std::process::Command::new("taskset")
+            .args([
+                "-c",
+                "5",
+                "tcpdump",
+                "-i",
+                "test-left",
+                "-w",
+                "client.pcap",
+                "-B",
+                "1048576",
+            ])
+            .spawn()
+            .unwrap();
+
+        sleep(5);
+
         let mut output = std::process::Command::new("taskset")
             .args([
                 "-c",
@@ -240,10 +289,14 @@ fn run_iperf(client_ns: &Arc<NetNs>, server_ns: &Arc<NetNs>) {
                 "192.168.12.1",
                 // "-n",
                 // "4096M",
+                "-p",
+                "9000",
+                "-b",
+                "3G",
                 "-t",
-                "10",
-                "-C",
-                "bbr",
+                "5",
+                // "-C",
+                // "bbr",
             ])
             .spawn()
             .unwrap();
@@ -251,6 +304,8 @@ fn run_iperf(client_ns: &Arc<NetNs>, server_ns: &Arc<NetNs>) {
         if !output.wait().unwrap().success() {
             panic!("failed to run iperf3 client");
         };
+
+        signal::kill(Pid::from_raw(packet_dump.id() as i32), Signal::SIGINT).unwrap();
     });
 
     client_handle.join().unwrap();
@@ -258,7 +313,7 @@ fn run_iperf(client_ns: &Arc<NetNs>, server_ns: &Arc<NetNs>) {
 }
 
 fn main() {
-    let (client_ns, server_ns, stop_signal, handle) = prepare_env(false, true);
+    let (client_ns, server_ns, stop_signal, handle) = prepare_env(true, false);
     run_iperf(&client_ns, &server_ns);
     stop_signal.store(false, std::sync::atomic::Ordering::SeqCst);
     handle.join().unwrap();

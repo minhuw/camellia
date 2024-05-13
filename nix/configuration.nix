@@ -43,6 +43,4 @@
     bpftrace
     htop
   ];
-
-  services.udev.enable = false;
 }

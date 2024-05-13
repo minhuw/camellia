@@ -52,13 +52,14 @@
             ethtool
             libcap
             libpcap
+            valgrind
             llvmPackages_15.clangUseLLVM
             llvmPackages_15.libllvm
             llvmPackages_15.libclang
             rust-bin.stable.latest.default
             m4
             zlib
-            iperf3
+            iperf
             nixfmt-rfc-style
           ];
 
