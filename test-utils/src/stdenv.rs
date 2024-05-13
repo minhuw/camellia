@@ -46,8 +46,6 @@ pub fn setup_veth() -> Result<(VethPair, VethPair)> {
             .unwrap();
 
         client_exec_handle.wait().unwrap();
-
-        set_rps_cores(left_pair.left.name.as_str(), &[1]);
     }
 
     {
@@ -60,8 +58,6 @@ pub fn setup_veth() -> Result<(VethPair, VethPair)> {
             .unwrap();
 
         right_exec_handle.wait().unwrap();
-
-        set_rps_cores(right_pair.right.name.as_str(), &[3]);
     }
 
     {

@@ -39,6 +39,7 @@
         devShells.default = mkShell {
           buildInputs = [
             pkg-config
+            bpftool
             elfutils
             ethtool
             libcap

@@ -215,12 +215,12 @@ fn run_iperf(client_ns: &Arc<NetNs>, server_ns: &Arc<NetNs>) {
         std::thread::spawn(move || {
             core_affinity::set_for_current(core_affinity::CoreId { id: 3 });
             let _guarad = server_ns.enter().unwrap();
-            let mut output = std::process::Command::new("iperf3")
+            let output = std::process::Command::new("iperf3")
                 .args(["-s", "-1"])
-                .spawn()
+                .output()
                 .unwrap();
 
-            if !output.wait().unwrap().success() {
+            if !output.status.success() {
                 panic!("failed to run iperf3 server");
             };
         })
@@ -232,17 +232,7 @@ fn run_iperf(client_ns: &Arc<NetNs>, server_ns: &Arc<NetNs>) {
         core_affinity::set_for_current(core_affinity::CoreId { id: 1 });
         let _guard = client_ns.enter().unwrap();
         let mut output = std::process::Command::new("iperf3")
-            .args([
-                "-c",
-                "192.168.12.1",
-                // "-n",
-                // "1024M",
-                // "-J",
-                "-t",
-                "10",
-                "-C",
-                "reno",
-            ])
+            .args(["-c", "192.168.12.1", "-n", "1024M", "-J", "-C", "reno"])
             .spawn()
             .unwrap();
 
