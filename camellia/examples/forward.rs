@@ -228,22 +228,6 @@ fn run_iperf(client_ns: &Arc<NetNs>, server_ns: &Arc<NetNs>) {
         core_affinity::set_for_current(core_affinity::CoreId { id: 3 });
         let _guarad = server_ns.enter().unwrap();
 
-        let packet_dump = std::process::Command::new("taskset")
-            .args([
-                "-c",
-                "6",
-                "tcpdump",
-                "-i",
-                "test-right",
-                "-w",
-                "server.pcap",
-                "-B",
-                "1048576",
-            ])
-            .spawn()
-            .unwrap();
-
-        sleep(5);
 
         let output = std::process::Command::new("taskset")
             .args(["-c", "3", "iperf3", "-p", "9000", "-s", "-1"])
@@ -254,7 +238,6 @@ fn run_iperf(client_ns: &Arc<NetNs>, server_ns: &Arc<NetNs>) {
             panic!("failed to run iperf3 server");
         };
 
-        signal::kill(Pid::from_raw(packet_dump.id() as i32), Signal::SIGINT).unwrap();
     });
 
     std::thread::sleep(Duration::from_secs(1));
@@ -263,22 +246,6 @@ fn run_iperf(client_ns: &Arc<NetNs>, server_ns: &Arc<NetNs>) {
         core_affinity::set_for_current(core_affinity::CoreId { id: 1 });
         let _guard = client_ns.enter().unwrap();
 
-        let packet_dump = std::process::Command::new("taskset")
-            .args([
-                "-c",
-                "5",
-                "tcpdump",
-                "-i",
-                "test-left",
-                "-w",
-                "client.pcap",
-                "-B",
-                "1048576",
-            ])
-            .spawn()
-            .unwrap();
-
-        sleep(5);
 
         let mut output = std::process::Command::new("taskset")
             .args([
@@ -291,12 +258,10 @@ fn run_iperf(client_ns: &Arc<NetNs>, server_ns: &Arc<NetNs>) {
                 // "4096M",
                 "-p",
                 "9000",
-                "-b",
-                "3G",
                 "-t",
-                "5",
-                // "-C",
-                // "bbr",
+                "10",
+                "-C",
+                "bbr",
             ])
             .spawn()
             .unwrap();
@@ -305,7 +270,6 @@ fn run_iperf(client_ns: &Arc<NetNs>, server_ns: &Arc<NetNs>) {
             panic!("failed to run iperf3 client");
         };
 
-        signal::kill(Pid::from_raw(packet_dump.id() as i32), Signal::SIGINT).unwrap();
     });
 
     client_handle.join().unwrap();
@@ -313,7 +277,7 @@ fn run_iperf(client_ns: &Arc<NetNs>, server_ns: &Arc<NetNs>) {
 }
 
 fn main() {
-    let (client_ns, server_ns, stop_signal, handle) = prepare_env(true, false);
+    let (client_ns, server_ns, stop_signal, handle) = prepare_env(false, false);
     run_iperf(&client_ns, &server_ns);
     stop_signal.store(false, std::sync::atomic::Ordering::SeqCst);
     handle.join().unwrap();

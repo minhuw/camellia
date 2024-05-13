@@ -43,9 +43,25 @@ pub fn setup_veth() -> Result<(VethPair, VethPair)> {
         let mut client_exec_handle = std::process::Command::new("ip")
             .args(["route", "add", "default", "via", "192.168.11.1"])
             .spawn()
+            .unwrap()
+            .wait()
             .unwrap();
 
-        client_exec_handle.wait().unwrap();
+        let mut client_exec_handle = std::process::Command::new("tc")
+            .args([
+                "qdisc",
+                "add",
+                "dev",
+                left_pair.left.name.as_str(),
+                "root",
+                "handle",
+                "1:",
+                "fq",
+            ])
+            .spawn()
+            .unwrap()
+            .wait()
+            .unwrap();
 
         set_rps_cores(left_pair.left.name.as_str(), &[1]);
     }
@@ -57,9 +73,25 @@ pub fn setup_veth() -> Result<(VethPair, VethPair)> {
         let mut right_exec_handle = std::process::Command::new("ip")
             .args(["route", "add", "default", "via", "192.168.12.1"])
             .spawn()
+            .unwrap()
+            .wait()
             .unwrap();
 
-        right_exec_handle.wait().unwrap();
+        let mut client_exec_handle = std::process::Command::new("tc")
+            .args([
+                "qdisc",
+                "add",
+                "dev",
+                right_pair.right.name.as_str(),
+                "root",
+                "handle",
+                "1:",
+                "fq",
+            ])
+            .spawn()
+            .unwrap()
+            .wait()
+            .unwrap();
 
         set_rps_cores(right_pair.right.name.as_str(), &[3]);
     }

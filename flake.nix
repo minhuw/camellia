@@ -45,6 +45,7 @@
         devShells.default = mkShell {
           buildInputs = [
             colmena
+            dropwatch
             pkg-config
             bpftools
             bpftrace
