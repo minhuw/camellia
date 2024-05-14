@@ -19,7 +19,6 @@ env_logger = "0.11.3"
 etherparse = "0.14.3"
 criterion = "0.5.1"
 rlimit = "0.10.1"
-tempdir = "0.3.7"
 tracing = "0.1.37"
 
 [build-dependencies]

@@ -1,3 +1,4 @@
+use super::netns::NetNs;
 use anyhow::{anyhow, Result};
 use nix::net::if_::if_nametoindex;
 use once_cell::sync::OnceCell;
@@ -6,8 +7,7 @@ use std::{
     process::Command,
     sync::{Arc, Weak},
 };
-
-use super::netns::NetNs;
+use tempfile::TempDir;
 
 pub struct VethPair {
     pub left: Arc<VethDevice>,
@@ -306,8 +306,9 @@ pub fn set_promiscuous(name: &str) {
     }
 }
 
-fn remount_sys() -> Result<tempdir::TempDir> {
-    let temp_dir = tempdir::TempDir::new("ns_sys").unwrap();
+fn remount_sys() -> Result<tempfile::TempDir> {
+    let temp_dir = TempDir::with_prefix("ns_sys")?;
+
     Command::new("mount")
         .args([
             "-t",
