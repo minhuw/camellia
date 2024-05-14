@@ -32,8 +32,8 @@ fn build_a_packet(
     mut frame: AppFrame<DedicatedAccessor>,
 ) -> camellia::umem::frame::AppFrame<DedicatedAccessor> {
     let builder = PacketBuilder::ethernet2(
-        veth_pair.left.mac_addr.clone().bytes(),
-        veth_pair.right.mac_addr.clone().bytes(),
+        veth_pair.left.mac_addr.bytes(),
+        veth_pair.right.mac_addr.bytes(),
     )
     .ipv4([0, 0, 0, 0], [0, 0, 0, 0], 255);
 
@@ -62,7 +62,7 @@ fn test_packet_io() {
     let mut left_socket = XskSocketBuilder::new()
         .ifname("test-left")
         .queue_index(0)
-        .with_umem(umem_left.into())
+        .with_umem(umem_left)
         .enable_cooperate_schedule()
         .build()
         .unwrap();
@@ -70,7 +70,7 @@ fn test_packet_io() {
     let mut right_socket = XskSocketBuilder::new()
         .ifname("test-right")
         .queue_index(0)
-        .with_umem(umem_right.into())
+        .with_umem(umem_right)
         .enable_cooperate_schedule()
         .build()
         .unwrap();

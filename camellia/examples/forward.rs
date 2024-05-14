@@ -9,13 +9,7 @@ use camellia::{
     socket::af_xdp::XskSocketBuilder,
     umem::{base::UMemBuilder, shared::SharedAccessor},
 };
-use nix::{
-    sys::{
-        epoll::{self, EpollCreateFlags, EpollEvent},
-        signal::{self, Signal},
-    },
-    unistd::{sleep, Pid},
-};
+use nix::sys::epoll::{self, EpollCreateFlags, EpollEvent};
 use test_utils::{netns::NetNs, stdenv::setup_veth, veth::MacAddr};
 
 fn prepare_env(
@@ -183,7 +177,7 @@ fn prepare_env(
                             .flatten()
                             .collect();
 
-                        let remaining = right_socket.send_bulk(frames).unwrap();
+                        right_socket.send_bulk(frames).unwrap();
                         // assert_eq!(remaining.len(), 0);
                     } else if fd == right_socket.as_fd().as_raw_fd() {
                         let frames = right_socket.recv_bulk(batch_size).unwrap();
@@ -205,8 +199,7 @@ fn prepare_env(
                             .flatten()
                             .collect();
 
-                        let remaining = left_socket.send_bulk(frames).unwrap();
-                        // assert_eq!(remaining.len(), 0);
+                        left_socket.send_bulk(frames).unwrap();
                     } else {
                         panic!("unexpected fd: {}", fd);
                     }
@@ -228,7 +221,6 @@ fn run_iperf(client_ns: &Arc<NetNs>, server_ns: &Arc<NetNs>) {
         core_affinity::set_for_current(core_affinity::CoreId { id: 3 });
         let _guarad = server_ns.enter().unwrap();
 
-
         let output = std::process::Command::new("taskset")
             .args(["-c", "3", "iperf3", "-p", "9000", "-s", "-1"])
             .output()
@@ -237,7 +229,6 @@ fn run_iperf(client_ns: &Arc<NetNs>, server_ns: &Arc<NetNs>) {
         if !output.status.success() {
             panic!("failed to run iperf3 server");
         };
-
     });
 
     std::thread::sleep(Duration::from_secs(1));
@@ -246,7 +237,6 @@ fn run_iperf(client_ns: &Arc<NetNs>, server_ns: &Arc<NetNs>) {
         core_affinity::set_for_current(core_affinity::CoreId { id: 1 });
         let _guard = client_ns.enter().unwrap();
 
-
         let mut output = std::process::Command::new("taskset")
             .args([
                 "-c",
@@ -254,8 +244,6 @@ fn run_iperf(client_ns: &Arc<NetNs>, server_ns: &Arc<NetNs>) {
                 "iperf3",
                 "-c",
                 "192.168.12.1",
-                // "-n",
-                // "4096M",
                 "-p",
                 "9000",
                 "-t",
@@ -269,7 +257,6 @@ fn run_iperf(client_ns: &Arc<NetNs>, server_ns: &Arc<NetNs>) {
         if !output.wait().unwrap().success() {
             panic!("failed to run iperf3 client");
         };
-
     });
 
     client_handle.join().unwrap();

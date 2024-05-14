@@ -32,13 +32,13 @@ fn build_bpftool(out_path: &Path) -> Result<PathBuf> {
 }
 
 fn main() -> anyhow::Result<()> {
+    const XDP_LIBRARY_SUFFIX: &str = "lib/libxdp.a";
+    const BPF_LIBRARY_SUFFIX: &str = "lib/libbpf.a";
+
     let src_path = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
     let lib_path = out_path.join("lib");
     let include_path = out_path.join("include");
-
-    const XDP_LIBRARY_SUFFIX: &str = "lib/libxdp.a";
-    const BPF_LIBRARY_SUFFIX: &str = "lib/libbpf.a";
 
     which("m4").expect("m4 is missing");
     which("clang").expect("clang is missing");

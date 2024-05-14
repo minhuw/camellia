@@ -29,8 +29,8 @@ fn packet_forward(epoll: bool, busy_polling: bool) {
         core_affinity::set_for_current(core_affinity::CoreId { id: 2 });
 
         let broadcase_address = MacAddr::new([0xff, 0xff, 0xff, 0xff, 0xff, 0xff]);
-        let mac_address_client = veth_pair.0.left.mac_addr.clone();
-        let mac_address_server = veth_pair.1.right.mac_addr.clone();
+        let mac_address_client = veth_pair.0.left.mac_addr;
+        let mac_address_server = veth_pair.1.right.mac_addr;
 
         let _guard = veth_pair.0.right.namespace.enter().unwrap();
 
@@ -67,13 +67,10 @@ fn packet_forward(epoll: bool, busy_polling: bool) {
         if !epoll {
             while running_clone.load(std::sync::atomic::Ordering::SeqCst) {
                 let frames = left_socket.recv_bulk(32).unwrap();
-                if frames.len() != 0 {
-                    log::debug!("receive {} frames from left socket", frames.len());
-                }
 
                 let frames: Vec<_> = frames
                     .into_iter()
-                    .map(|frame| {
+                    .filter_map(|frame| {
                         let (ether_header, _remaining) =
                             etherparse::Ethernet2Header::from_slice(frame.raw_buffer()).unwrap();
 
@@ -87,20 +84,16 @@ fn packet_forward(epoll: bool, busy_polling: bool) {
                             None
                         }
                     })
-                    .flatten()
                     .collect();
 
                 let remaining = right_socket.send_bulk(frames).unwrap();
                 assert_eq!(remaining.len(), 0);
 
                 let frames = right_socket.recv_bulk(32).unwrap();
-                if frames.len() != 0 {
-                    log::debug!("receive {} frames from right socket", frames.len());
-                }
 
                 let frames: Vec<_> = frames
                     .into_iter()
-                    .map(|frame| {
+                    .filter_map(|frame| {
                         let (ether_header, _remaining) =
                             etherparse::Ethernet2Header::from_slice(frame.raw_buffer()).unwrap();
 
@@ -114,7 +107,6 @@ fn packet_forward(epoll: bool, busy_polling: bool) {
                             None
                         }
                     })
-                    .flatten()
                     .collect();
 
                 let remaining = left_socket.send_bulk(frames).unwrap();
@@ -140,17 +132,14 @@ fn packet_forward(epoll: bool, busy_polling: bool) {
             while running_clone.load(std::sync::atomic::Ordering::SeqCst) {
                 let num_events = epoll.wait(&mut events, timeout_ms).unwrap();
 
-                for i in 0..num_events {
-                    let fd = events[i].data() as i32;
+                for event in events.iter().take(num_events) {
+                    let fd = event.data() as i32;
                     if fd == left_socket.as_fd().as_raw_fd() {
                         let frames = left_socket.recv_bulk(32).unwrap();
-                        if frames.len() != 0 {
-                            log::debug!("receive {} frames from left socket", frames.len());
-                        }
 
                         let frames: Vec<_> = frames
                             .into_iter()
-                            .map(|frame| {
+                            .filter_map(|frame| {
                                 let (ether_header, _remaining) =
                                     etherparse::Ethernet2Header::from_slice(frame.raw_buffer())
                                         .unwrap();
@@ -165,20 +154,16 @@ fn packet_forward(epoll: bool, busy_polling: bool) {
                                     None
                                 }
                             })
-                            .flatten()
                             .collect();
 
                         let remaining = right_socket.send_bulk(frames).unwrap();
                         assert_eq!(remaining.len(), 0);
                     } else if fd == right_socket.as_fd().as_raw_fd() {
                         let frames = right_socket.recv_bulk(32).unwrap();
-                        if frames.len() != 0 {
-                            log::debug!("receive {} frames from right socket", frames.len());
-                        }
 
                         let frames: Vec<_> = frames
                             .into_iter()
-                            .map(|frame| {
+                            .filter_map(|frame| {
                                 let (ether_header, _remaining) =
                                     etherparse::Ethernet2Header::from_slice(frame.raw_buffer())
                                         .unwrap();
@@ -193,7 +178,6 @@ fn packet_forward(epoll: bool, busy_polling: bool) {
                                     None
                                 }
                             })
-                            .flatten()
                             .collect();
 
                         let remaining = left_socket.send_bulk(frames).unwrap();

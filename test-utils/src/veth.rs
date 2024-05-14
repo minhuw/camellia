@@ -31,17 +31,14 @@ impl VethPairBuilder {
             .unwrap();
         let output = handle.wait_with_output().unwrap();
 
-        match output.status.success() {
-            true => {}
-            false => {
-                return Err(anyhow!(
-                    "Failed to create veth pair: {}",
-                    String::from_utf8_lossy(&output.stderr)
-                ))
-            }
+        if !output.status.success() {
+            return Err(anyhow!(
+                "Failed to create veth pair: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ));
         }
-        bind_namespace(&left.name, left.namespace.as_ref().unwrap().clone()).unwrap();
-        bind_namespace(&right.name, right.namespace.as_ref().unwrap().clone()).unwrap();
+        bind_namespace(&left.name, &left.namespace.as_ref().unwrap().clone()).unwrap();
+        bind_namespace(&right.name, &right.namespace.as_ref().unwrap().clone()).unwrap();
 
         let left_index = {
             let _guard = left.namespace.as_ref().unwrap().enter().unwrap();
@@ -170,16 +167,19 @@ impl VethDeviceBuilder {
         }
     }
 
+    #[must_use]
     pub fn mac_addr(mut self, mac_addr: MacAddr) -> Self {
         self.mac_addr = Some(mac_addr);
         self
     }
 
+    #[must_use]
     pub fn ip_addr(mut self, ip_addr: IpAddr, prefix: u8) -> Self {
         self.ip_addr = Some((ip_addr, prefix));
         self
     }
 
+    #[must_use]
     pub fn namespace(mut self, namespace: std::sync::Arc<NetNs>) -> Self {
         self.namespace = Some(namespace);
         self
@@ -208,9 +208,10 @@ pub fn _down_device(name: &str) -> Result<()> {
         .output()
         .unwrap();
 
-    match output.status.success() {
-        true => Ok(()),
-        false => Err(anyhow!(String::from_utf8(output.stderr).unwrap())),
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(anyhow!(String::from_utf8(output.stderr).unwrap()))
     }
 }
 
@@ -223,9 +224,10 @@ pub fn up_device(name: &str) -> Result<()> {
         .arg("up")
         .output()?;
 
-    match output.status.success() {
-        true => Ok(()),
-        false => Err(anyhow!(String::from_utf8(output.stderr).unwrap())),
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(anyhow!(String::from_utf8(output.stderr).unwrap()))
     }
 }
 
@@ -239,9 +241,10 @@ pub fn set_device_l2_addr(name: &str, mac_addr: MacAddr) -> Result<()> {
         .arg(mac_addr.to_string())
         .output()?;
 
-    match output.status.success() {
-        true => Ok(()),
-        false => Err(anyhow!(String::from_utf8(output.stderr).unwrap())),
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(anyhow!(String::from_utf8(output.stderr).unwrap()))
     }
 }
 
@@ -249,14 +252,15 @@ pub fn set_l3_addr(name: &str, ip_addr: IpAddr, prefix: u8) -> Result<()> {
     let output = Command::new("ip")
         .arg("address")
         .arg("add")
-        .arg(format!("{}/{}", ip_addr, prefix))
+        .arg(format!("{ip_addr}/{prefix}"))
         .arg("dev")
         .arg(name)
         .output()?;
 
-    match output.status.success() {
-        true => Ok(()),
-        false => Err(anyhow!(String::from_utf8(output.stderr).unwrap())),
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(anyhow!(String::from_utf8(output.stderr)?))
     }
 }
 
@@ -321,7 +325,7 @@ pub fn set_rps_cores(name: &str, cores: &[usize]) {
     let temp_dir = remount_sys().unwrap();
     let sys_path = format!("{}/class/net/{}/queues", temp_dir.path().display(), name);
 
-    println!("set_rps_cores: sys_path={}", sys_path);
+    println!("set_rps_cores: sys_path={sys_path}");
 
     for entry in std::fs::read_dir(sys_path).unwrap() {
         let entry = entry.unwrap();
@@ -339,7 +343,7 @@ pub fn set_rps_cores(name: &str, cores: &[usize]) {
 
             println!("write {:x} to {}", bitmap, file.display());
 
-            std::fs::write(file, format!("{:x}", bitmap)).unwrap();
+            std::fs::write(file, format!("{bitmap:x}")).unwrap();
         }
     }
 }
@@ -372,14 +376,15 @@ pub fn disable_checksum_offload(name: &str) -> Result<()> {
         .args(["-K", name, "tx", "off", "rx", "off"])
         .output()?;
 
-    match output.status.success() {
-        true => Ok(()),
-        false => Err(anyhow!(String::from_utf8(output.stderr).unwrap())),
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(anyhow!(String::from_utf8(output.stderr).unwrap()))
     }
 }
 
-pub fn bind_namespace(name: &str, netns: std::sync::Arc<NetNs>) -> Result<()> {
-    if NetNs::current().unwrap() == netns {
+pub fn bind_namespace(name: &str, netns: &std::sync::Arc<NetNs>) -> Result<()> {
+    if &NetNs::current().unwrap() == netns {
         return Ok(());
     }
 
@@ -396,9 +401,10 @@ pub fn bind_namespace(name: &str, netns: std::sync::Arc<NetNs>) -> Result<()> {
         ])
         .output()?;
 
-    match output.status.success() {
-        true => Ok(()),
-        false => Err(anyhow!(String::from_utf8(output.stderr).unwrap())),
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(anyhow!(String::from_utf8(output.stderr).unwrap()))
     }
 }
 
@@ -416,11 +422,13 @@ pub struct MacAddr {
 
 impl MacAddr {
     /// Creates a new `MacAddr` struct from the given bytes.
+    #[must_use]
     pub fn new(bytes: [u8; 6]) -> MacAddr {
         MacAddr { bytes }
     }
 
     /// Returns the array of MAC address bytes.
+    #[must_use]
     pub fn bytes(self) -> [u8; 6] {
         self.bytes
     }

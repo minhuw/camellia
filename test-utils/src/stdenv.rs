@@ -40,14 +40,14 @@ pub fn setup_veth() -> Result<(VethPair, VethPair)> {
         let _guard = client_netns.enter().unwrap();
 
         // Set the default route of left and right namespaces
-        let mut client_exec_handle = std::process::Command::new("ip")
+        std::process::Command::new("ip")
             .args(["route", "add", "default", "via", "192.168.11.1"])
             .spawn()
             .unwrap()
             .wait()
             .unwrap();
 
-        let mut client_exec_handle = std::process::Command::new("tc")
+        std::process::Command::new("tc")
             .args([
                 "qdisc",
                 "add",
@@ -70,14 +70,14 @@ pub fn setup_veth() -> Result<(VethPair, VethPair)> {
         let _guard = server_netns.enter().unwrap();
 
         // Set the default route of left and right namespaces
-        let mut right_exec_handle = std::process::Command::new("ip")
+        std::process::Command::new("ip")
             .args(["route", "add", "default", "via", "192.168.12.1"])
             .spawn()
             .unwrap()
             .wait()
             .unwrap();
 
-        let mut client_exec_handle = std::process::Command::new("tc")
+        std::process::Command::new("tc")
             .args([
                 "qdisc",
                 "add",

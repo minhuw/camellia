@@ -440,7 +440,7 @@ mod test {
 
         assert_eq!(buffer.len(), 1024);
 
-        buffer.write(b"hello, world\0").unwrap();
+        buffer.write_all(b"hello, world\0").unwrap();
 
         let chunk = frame.chunk();
         unsafe {

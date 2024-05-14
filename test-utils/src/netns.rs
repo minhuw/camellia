@@ -279,17 +279,19 @@ impl<E: Env> NetNs<E> {
         Ok(())
     }
 
-    /// Gets the path of this NetNs.
+    /// Gets the path of this `NetNs`.
     pub fn path(&self) -> &Path {
         &self.path
     }
 
-    /// Gets the Env of this NetNs.
+    /// Gets the Env of this `NetNs`.
+    #[must_use]
     pub fn env(&self) -> std::sync::Arc<E> {
         self.env.clone()
     }
 
     /// Gets the Env of this network namespace.
+    #[must_use]
     pub fn file(&self) -> &File {
         &self.file
     }
@@ -299,10 +301,10 @@ impl<E: Env> Drop for NetNs<E> {
     fn drop(&mut self) {
         let fd = self.file.as_raw_fd();
         if let Err(e) = nix::unistd::close(fd) {
-            eprintln!("Failed to close netns: {}", e);
+            eprintln!("Failed to close netns: {e}");
         }
         if let Err(e) = self.env.clone().remove(self) {
-            eprintln!("Failed to remove netns: {}", e);
+            eprintln!("Failed to remove netns: {e}");
         }
     }
 }
@@ -317,7 +319,7 @@ where
 {
     fn drop(&mut self) {
         if let Err(e) = self.old.enter_without_guard() {
-            panic!("Failed to go back to old netns: {}", e);
+            panic!("Failed to go back to old netns: {e}");
         }
     }
 }

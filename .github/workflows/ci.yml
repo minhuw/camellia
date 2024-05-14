@@ -30,3 +30,12 @@ jobs:
   #     - run: cargo test
   #       env:
   #         CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: 'sudo -E'
+
+  audit:
+    name: Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: 'true'
+      - uses: actions-rust-lang/audit@v1
