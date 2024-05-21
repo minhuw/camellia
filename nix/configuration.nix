@@ -4,8 +4,10 @@
     uid = 1001;
     hashedPassword =
       "$6$rounds=1000$libvirtd$ENoC6piIn3NbaQhtu/eGbqW..m4k/2EL6JtoFLeh/zdrMX5ajj75mQ9H7rdeTNztkm5cJX1X4ho6xvJ7MwR5V/";
-    extraGroups = [ "wheel" ];
+    extraGroups = [ "wheel" "docker" ];
   };
+
+  virtualisation.docker.enable = true;
 
   security.sudo = { wheelNeedsPassword = false; };
 
