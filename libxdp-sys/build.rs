@@ -33,7 +33,6 @@ fn build_bpftool(out_path: &Path) -> Result<PathBuf> {
 
 fn main() -> anyhow::Result<()> {
     const XDP_LIBRARY_SUFFIX: &str = "lib/libxdp.a";
-    const BPF_LIBRARY_SUFFIX: &str = "lib/libbpf.a";
 
     let src_path = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
@@ -85,14 +84,6 @@ fn main() -> anyhow::Result<()> {
         return Err(anyhow::anyhow!("unable to compile libxdp library"));
     }
 
-    let install_result = Command::new("make")
-        .arg("install")
-        .env("DESTDIR", out_path.clone())
-        .env("PREFIX", "")
-        .env("LIBDIR", "/lib")
-        .current_dir(src_path.join("xdp-tools/lib/libbpf/src"))
-        .output()?;
-
     if !install_result.status.success() {
         eprintln!(
             "unable to compile libbpf stdout: {}, stderr: {}",
@@ -103,14 +94,13 @@ fn main() -> anyhow::Result<()> {
         return Err(anyhow::anyhow!("unable to compile libbpf library"));
     }
 
-    if !out_path.join(XDP_LIBRARY_SUFFIX).exists() || !out_path.join(BPF_LIBRARY_SUFFIX).exists() {
+    if !out_path.join(XDP_LIBRARY_SUFFIX).exists() {
         eprintln!("unable to find libxdp or libbpf libraries");
         return Err(anyhow::anyhow!("unable to find libxdp or libbpf libraries"));
     }
 
     println!("cargo:rustc-link-search=native={}", lib_path.display());
     println!("cargo:rustc-link-lib=static=xdp");
-    println!("cargo:rustc-link-lib=static=bpf");
 
     println!("cargo:rustc-link-lib=elf");
     println!("cargo:rustc-link-lib=z");
