@@ -341,6 +341,8 @@ pub struct XskSocket<M: UMemAccessor> {
     schedule_mode: ScheduleMode,
 }
 
+unsafe impl<M> Send for XskSocket<M> where M: UMemAccessor {}
+
 impl XskSocket<SharedAccessor> {
     fn new(
         ifname: &str,

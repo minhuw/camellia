@@ -84,6 +84,14 @@ fn main() -> anyhow::Result<()> {
         return Err(anyhow::anyhow!("unable to compile libxdp library"));
     }
 
+    let install_result = Command::new("make")
+        .arg("install")
+        .env("DESTDIR", out_path.clone())
+        .env("PREFIX", "")
+        .env("LIBDIR", "/lib")
+        .current_dir(src_path.join("xdp-tools/lib/libbpf/src"))
+        .output()?;
+
     if !install_result.status.success() {
         eprintln!(
             "unable to compile libbpf stdout: {}, stderr: {}",

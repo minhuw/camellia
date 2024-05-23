@@ -144,6 +144,8 @@ pub struct UMem {
     pub inner: *mut xsk_umem,
 }
 
+unsafe impl Send for UMem {}
+
 static LOCKED_IO_MEMORY: Mutex<u64> = Mutex::new(0);
 
 impl UMem {
