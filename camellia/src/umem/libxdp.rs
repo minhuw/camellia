@@ -80,10 +80,6 @@ pub fn wakeup_rx(fd: BorrowedFd) -> Result<(), CamelliaError> {
     Ok(())
 }
 
-pub fn need_wakeup(ring: &xsk_ring_prod) -> bool {
-    unsafe { xsk_ring_prod__needs_wakeup(ring) != 0 }
-}
-
 pub fn wakeup_tx(fd: BorrowedFd) -> Result<(), CamelliaError> {
     unsafe {
         Errno::result(sendto(

@@ -1,12 +1,10 @@
 use std::{
-    cell::{Ref, RefCell},
     collections::HashMap,
     pin::Pin,
-    rc::Rc,
     sync::{Arc, Mutex},
 };
 
-use libxdp_sys::xsk_ring_prod;
+use libxdp_sys::xsk_ring_prod__needs_wakeup;
 
 use crate::error::CamelliaError;
 
@@ -14,9 +12,10 @@ use super::{
     base::{CompletionQueue, FillQueue, UMem},
     frame::{AppFrame, Chunk},
     libxdp::{populate_fill_ring, recycle_compeletion_ring},
-    UMemAccessor,
+    AccessorRef,
 };
 
+#[derive(Debug)]
 pub struct SharedAccessor {
     shared_umem: Arc<Mutex<UMem>>,
     cached_chunks: Vec<Chunk>,
@@ -68,20 +67,6 @@ impl SharedAccessor {
         }
     }
 
-    fn allocate(
-        umem_rc: &Rc<RefCell<Self>>,
-        n: usize,
-    ) -> Result<Vec<AppFrame<SharedAccessor>>, CamelliaError> {
-        let mut shared_umem = umem_rc.borrow_mut();
-        shared_umem.pre_alloc(n)?;
-
-        Ok(shared_umem
-            .cached_chunks
-            .drain(0..n)
-            .map(|chunk| AppFrame::from_chunk(chunk, umem_rc.clone()))
-            .collect())
-    }
-
     fn free(&mut self, chunk: Chunk) {
         self.cached_chunks.push(chunk);
         self.after_free();
@@ -127,47 +112,55 @@ impl SharedAccessor {
     }
 }
 
-impl UMemAccessor for SharedAccessor {
+pub type SharedAccessorRef = Arc<Mutex<SharedAccessor>>;
+
+impl AccessorRef for SharedAccessorRef {
     type UMemRef = Arc<Mutex<UMem>>;
-    type AccessorRef = Rc<RefCell<SharedAccessor>>;
+    fn allocate(&self, n: usize) -> Result<Vec<AppFrame<Self>>, CamelliaError> {
+        let mut shared_umem = self.lock().unwrap();
+        shared_umem.pre_alloc(n)?;
 
-    fn allocate(
-        umem_rc: &Self::AccessorRef,
-        n: usize,
-    ) -> Result<Vec<AppFrame<Self>>, CamelliaError> {
-        SharedAccessor::allocate(umem_rc, n)
+        Ok(shared_umem
+            .cached_chunks
+            .drain(0..n)
+            .map(|chunk| AppFrame::from_chunk(chunk, self.clone()))
+            .collect())
     }
 
-    fn equal(umem_rc: &Self::AccessorRef, other: &Self::AccessorRef) -> bool {
+    fn equal(&self, other: &Self) -> bool {
         // We compare address of SharedUMem instead of SharedUMemNode
-        Arc::ptr_eq(&umem_rc.borrow().shared_umem, &other.borrow().shared_umem)
+        Arc::ptr_eq(self, other)
+            || Arc::ptr_eq(
+                &self.lock().unwrap().shared_umem,
+                &other.lock().unwrap().shared_umem,
+            )
     }
 
-    fn fill(umem_rc: &Self::AccessorRef, n: usize) -> Result<usize, CamelliaError> {
-        umem_rc.borrow_mut().fill(n)
+    fn fill(&self, n: usize) -> Result<usize, CamelliaError> {
+        self.lock().unwrap().fill(n)
     }
 
-    fn free(umem_rc: &Self::AccessorRef, chunk: Chunk) {
-        umem_rc.borrow_mut().free(chunk)
+    fn free(&self, chunk: Chunk) {
+        self.lock().unwrap().free(chunk)
     }
 
-    fn extract_recv(umem_rc: &Self::AccessorRef, xdp_addr: u64) -> Chunk {
-        umem_rc.borrow_mut().extract_recv(xdp_addr)
+    fn extract_recv(&self, xdp_addr: u64) -> Chunk {
+        self.lock().unwrap().extract_recv(xdp_addr)
     }
 
-    fn register_send(umem_rc: &Self::AccessorRef, chunk: Chunk) {
-        umem_rc.borrow_mut().register_send(chunk)
+    fn register_send(&self, chunk: Chunk) {
+        self.lock().unwrap().register_send(chunk)
     }
 
-    fn inner(umem_rc: &Self::AccessorRef) -> usize {
-        umem_rc.borrow_mut().shared_umem.lock().unwrap().inner() as usize
+    fn inner(&self) -> usize {
+        self.lock().unwrap().shared_umem.lock().unwrap().inner() as usize
     }
 
-    fn fill_inner(umem_rc: &Self::AccessorRef) -> Ref<xsk_ring_prod> {
-        Ref::map(umem_rc.borrow(), |umem| &umem.fill.0)
+    fn need_wakeup(&self) -> bool {
+        unsafe { xsk_ring_prod__needs_wakeup(&self.lock().unwrap().fill.0) != 0 }
     }
 
-    fn recycle(umem_rc: &Self::AccessorRef) -> Result<usize, CamelliaError> {
-        umem_rc.borrow_mut().recycle()
+    fn recycle(&self) -> Result<usize, CamelliaError> {
+        self.lock().unwrap().recycle()
     }
 }

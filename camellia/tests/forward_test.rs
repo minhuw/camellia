@@ -6,7 +6,7 @@ use std::{
 
 use camellia::{
     socket::af_xdp::XskSocketBuilder,
-    umem::{base::UMemBuilder, shared::SharedAccessor},
+    umem::{base::UMemBuilder, shared::SharedAccessorRef},
 };
 
 use nix::sys::epoll::{self, EpollCreateFlags, EpollEvent};
@@ -38,7 +38,7 @@ fn packet_forward(epoll: bool, busy_polling: bool) {
             UMemBuilder::new().num_chunks(16384 * 16).build().unwrap(),
         ));
 
-        let mut left_socket_builder = XskSocketBuilder::<SharedAccessor>::new()
+        let mut left_socket_builder = XskSocketBuilder::<SharedAccessorRef>::new()
             .ifname("forward-left")
             .queue_index(0)
             .with_umem(umem.clone())
@@ -50,7 +50,7 @@ fn packet_forward(epoll: bool, busy_polling: bool) {
 
         let mut left_socket = left_socket_builder.build_shared().unwrap();
 
-        let mut right_socket_builder = XskSocketBuilder::<SharedAccessor>::new()
+        let mut right_socket_builder = XskSocketBuilder::<SharedAccessorRef>::new()
             .ifname("forward-right")
             .queue_index(0)
             .with_umem(umem)

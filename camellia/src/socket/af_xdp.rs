@@ -1,9 +1,7 @@
-use std::cell::RefCell;
 use std::cmp::min;
 use std::ffi::CString;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
 use std::pin::Pin;
-use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -16,23 +14,24 @@ use tracing::Level;
 
 use libxdp_sys::{
     xsk_ring_cons, xsk_ring_cons__peek, xsk_ring_cons__release, xsk_ring_cons__rx_desc,
-    xsk_ring_prod, xsk_ring_prod__reserve, xsk_ring_prod__submit, xsk_ring_prod__tx_desc,
-    xsk_socket, xsk_socket__create, xsk_socket__create_shared, xsk_socket__delete, xsk_socket__fd,
-    xsk_socket_config, xsk_socket_config__bindgen_ty_1, XSK_RING_CONS__DEFAULT_NUM_DESCS,
-    XSK_RING_PROD__DEFAULT_NUM_DESCS,
+    xsk_ring_prod, xsk_ring_prod__needs_wakeup, xsk_ring_prod__reserve, xsk_ring_prod__submit,
+    xsk_ring_prod__tx_desc, xsk_socket, xsk_socket__create, xsk_socket__create_shared,
+    xsk_socket__delete, xsk_socket__fd, xsk_socket_config, xsk_socket_config__bindgen_ty_1,
+    XSK_RING_CONS__DEFAULT_NUM_DESCS, XSK_RING_PROD__DEFAULT_NUM_DESCS,
 };
 use nix::errno::Errno;
 use tracing::event;
 
 use crate::error::CamelliaError;
-use crate::umem::libxdp::need_wakeup;
+use crate::umem::base::DedicatedAccessorRef;
 use crate::umem::libxdp::wakeup_rx;
 use crate::umem::libxdp::wakeup_tx;
+use crate::umem::shared::SharedAccessorRef;
 use crate::umem::{
-    base::{CompletionQueue, DedicatedAccessor, FillQueue, UMem},
+    base::{CompletionQueue, FillQueue, UMem},
     frame::{AppFrame, RxFrame, TxFrame},
     shared::SharedAccessor,
-    UMemAccessor,
+    AccessorRef,
 };
 
 #[derive(Debug)]
@@ -94,7 +93,7 @@ pub enum XSKUMem {
 
 pub struct XskSocketBuilder<M>
 where
-    M: UMemAccessor,
+    M: AccessorRef,
 {
     ifname: Option<String>,
     queue_index: Option<u32>,
@@ -110,7 +109,7 @@ where
 
 impl<M> Default for XskSocketBuilder<M>
 where
-    M: UMemAccessor,
+    M: AccessorRef,
 {
     fn default() -> Self {
         Self::new()
@@ -119,7 +118,7 @@ where
 
 impl<M> XskSocketBuilder<M>
 where
-    M: UMemAccessor,
+    M: AccessorRef,
 {
     pub fn new() -> Self {
         Self {
@@ -276,8 +275,8 @@ where
     }
 }
 
-impl XskSocketBuilder<DedicatedAccessor> {
-    pub fn build(self) -> Result<XskSocket<DedicatedAccessor>, CamelliaError> {
+impl XskSocketBuilder<DedicatedAccessorRef> {
+    pub fn build(self) -> Result<XskSocket<DedicatedAccessorRef>, CamelliaError> {
         let config = self.construct_config()?;
         let schedule_mode = if self.busy_polling {
             ScheduleMode::BusyPolling
@@ -287,7 +286,7 @@ impl XskSocketBuilder<DedicatedAccessor> {
             ScheduleMode::Legacy
         };
 
-        let xsk_socket = XskSocket::<DedicatedAccessor>::new(
+        let xsk_socket = XskSocket::<DedicatedAccessorRef>::new(
             &self.ifname.unwrap(),
             self.queue_index.unwrap(),
             self.umem.unwrap(),
@@ -301,8 +300,8 @@ impl XskSocketBuilder<DedicatedAccessor> {
     }
 }
 
-impl XskSocketBuilder<SharedAccessor> {
-    pub fn build_shared(self) -> Result<XskSocket<SharedAccessor>, CamelliaError> {
+impl XskSocketBuilder<SharedAccessorRef> {
+    pub fn build_shared(self) -> Result<XskSocket<SharedAccessorRef>, CamelliaError> {
         let config = self.construct_config()?;
         let schedule_mode = if self.busy_polling {
             ScheduleMode::BusyPolling
@@ -312,7 +311,7 @@ impl XskSocketBuilder<SharedAccessor> {
             ScheduleMode::Legacy
         };
 
-        let xsk_socket = XskSocket::<SharedAccessor>::new(
+        let xsk_socket = XskSocket::<SharedAccessorRef>::new(
             &self.ifname.unwrap(),
             self.queue_index.unwrap(),
             self.umem.unwrap(),
@@ -333,21 +332,21 @@ enum ScheduleMode {
     BusyPolling,
 }
 
-pub struct XskSocket<M: UMemAccessor> {
+pub struct XskSocket<M: AccessorRef> {
     inner: *mut xsk_socket,
-    umem: M::AccessorRef,
+    umem_accessor: M,
     rx: Pin<Box<RxQueue>>,
     tx: Pin<Box<TxQueue>>,
     schedule_mode: ScheduleMode,
 }
 
-unsafe impl<M> Send for XskSocket<M> where M: UMemAccessor {}
+unsafe impl<M> Send for XskSocket<M> where M: AccessorRef {}
 
-impl XskSocket<SharedAccessor> {
+impl XskSocket<SharedAccessorRef> {
     fn new(
         ifname: &str,
         queue_index: u32,
-        umem: <SharedAccessor as UMemAccessor>::UMemRef,
+        umem: <SharedAccessorRef as AccessorRef>::UMemRef,
         config: xsk_socket_config,
         schedule_mode: ScheduleMode,
     ) -> Result<Self, CamelliaError> {
@@ -383,18 +382,18 @@ impl XskSocket<SharedAccessor> {
             }
         }
 
-        let umem = Rc::new(RefCell::new(SharedAccessor::new(
-            umem,
+        let umem_accessor = Arc::new(Mutex::new(SharedAccessor::new(
+            umem.clone(),
             fill_queue,
             completion_queue,
         )?));
 
         // TODO: validate that the RX ring is fulfilled
-        <SharedAccessor as UMemAccessor>::fill(&umem, config.rx_size as usize).unwrap();
+        umem_accessor.fill(config.rx_size as usize).unwrap();
 
         Ok(XskSocket {
             inner: raw_socket,
-            umem,
+            umem_accessor,
             rx: rx_queue,
             tx: tx_queue,
             schedule_mode,
@@ -402,11 +401,11 @@ impl XskSocket<SharedAccessor> {
     }
 }
 
-impl XskSocket<DedicatedAccessor> {
+impl XskSocket<DedicatedAccessorRef> {
     fn new(
         ifname: &str,
         queue_index: u32,
-        umem: <DedicatedAccessor as UMemAccessor>::UMemRef,
+        umem: <DedicatedAccessorRef as AccessorRef>::UMemRef,
         config: xsk_socket_config,
         schedule_mode: ScheduleMode,
     ) -> Result<Self, CamelliaError> {
@@ -438,13 +437,12 @@ impl XskSocket<DedicatedAccessor> {
             }
         }
 
-        let umem = umem.into();
-        // TODO: validate that the RX ring is fulfilled
-        <DedicatedAccessor as UMemAccessor>::fill(&umem, config.rx_size as usize).unwrap();
+        let umem_accessor: DedicatedAccessorRef = umem.into();
+        umem_accessor.fill(config.rx_size as usize).unwrap();
 
         Ok(XskSocket {
             inner: raw_socket,
-            umem,
+            umem_accessor,
             rx: rx_queue,
             tx: tx_queue,
             schedule_mode,
@@ -454,7 +452,7 @@ impl XskSocket<DedicatedAccessor> {
 
 impl<M> XskSocket<M>
 where
-    M: UMemAccessor,
+    M: AccessorRef,
 {
     pub fn recv(&mut self) -> Result<Option<RxFrame<M>>, CamelliaError> {
         let mut received = self.recv_bulk(1)?;
@@ -471,7 +469,7 @@ where
         if received == 0 {
             match self.schedule_mode {
                 ScheduleMode::Cooperative | ScheduleMode::Legacy => {
-                    if need_wakeup(&M::fill_inner(&self.umem)) {
+                    if M::need_wakeup(&self.umem_accessor) {
                         wakeup_rx(self.as_fd())?;
                     }
                 }
@@ -490,8 +488,13 @@ where
                     ((*rx_desp).addr, (*rx_desp).len)
                 };
 
-                let chunk = M::extract_recv(&self.umem, addr);
-                RxFrame::from_chunk(chunk, self.umem.clone(), addr as usize, len as usize)
+                let chunk = M::extract_recv(&self.umem_accessor, addr);
+                RxFrame::from_chunk(
+                    chunk,
+                    self.umem_accessor.clone(),
+                    addr as usize,
+                    len as usize,
+                )
             })
             .collect();
 
@@ -500,7 +503,7 @@ where
         }
 
         // TODO: add an option controlling whether to fill the umem eagerly
-        let filled = M::fill(&self.umem, received as usize)?;
+        let filled = M::fill(&self.umem_accessor, received as usize)?;
 
         if filled < (received as usize) {
             log::warn!("fill failed, filled: {}, received: {}", filled, received);
@@ -517,7 +520,7 @@ where
     }
 
     pub fn allocate(&mut self, n: usize) -> Result<Vec<AppFrame<M>>, CamelliaError> {
-        UMemAccessor::allocate(&self.umem, n)
+        AccessorRef::allocate(&self.umem_accessor, n)
     }
 
     pub fn send<T>(&mut self, frame: T) -> Result<Option<T>, CamelliaError>
@@ -543,7 +546,7 @@ where
         let mut start_index = 0;
         let mut remaining = Vec::new();
 
-        M::recycle(&self.umem)?;
+        M::recycle(&self.umem_accessor)?;
 
         let iter = frames.into_iter();
 
@@ -557,7 +560,7 @@ where
             if (send_index as u32) < actual_sent {
                 let frame: TxFrame<M> = frame.into();
 
-                if !M::equal(frame.umem(), &self.umem) {
+                if !M::equal(frame.umem(), &self.umem_accessor) {
                     return Err(CamelliaError::InvalidArgument(
                         "Frame does not belong to this socket".to_string(),
                     ));
@@ -573,7 +576,7 @@ where
                     (*tx_desc).options = 0;
                 };
 
-                M::register_send(&self.umem, frame.take())
+                M::register_send(&self.umem_accessor, frame.take())
             } else {
                 remaining.push(frame);
             }
@@ -590,7 +593,7 @@ where
                 wakeup_tx(self.as_fd())?;
             }
             ScheduleMode::Cooperative => {
-                if need_wakeup(&self.tx.inner) {
+                if unsafe { xsk_ring_prod__needs_wakeup(&self.tx.inner) != 0 } {
                     wakeup_tx(self.as_fd())?;
                 }
             }
@@ -602,7 +605,7 @@ where
 
 impl<M> Drop for XskSocket<M>
 where
-    M: UMemAccessor,
+    M: AccessorRef,
 {
     fn drop(&mut self) {
         unsafe { xsk_socket__delete(self.inner) }
@@ -611,7 +614,7 @@ where
 
 impl<M> AsFd for XskSocket<M>
 where
-    M: UMemAccessor,
+    M: AccessorRef,
 {
     fn as_fd(&self) -> BorrowedFd {
         unsafe { BorrowedFd::borrow_raw(xsk_socket__fd(self.inner)) }

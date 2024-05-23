@@ -12,9 +12,10 @@ use std::{
 
 use libxdp_sys::{
     xsk_ring_cons, xsk_ring_cons__comp_addr, xsk_ring_cons__peek, xsk_ring_cons__release,
-    xsk_ring_prod, xsk_umem, xsk_umem__create, xsk_umem__delete, xsk_umem__fd, xsk_umem_config,
-    XSK_RING_CONS__DEFAULT_NUM_DESCS, XSK_RING_PROD__DEFAULT_NUM_DESCS,
-    XSK_UMEM__DEFAULT_FRAME_HEADROOM, XSK_UMEM__DEFAULT_FRAME_SIZE,
+    xsk_ring_prod, xsk_ring_prod__needs_wakeup, xsk_umem, xsk_umem__create, xsk_umem__delete,
+    xsk_umem__fd, xsk_umem_config, XSK_RING_CONS__DEFAULT_NUM_DESCS,
+    XSK_RING_PROD__DEFAULT_NUM_DESCS, XSK_UMEM__DEFAULT_FRAME_HEADROOM,
+    XSK_UMEM__DEFAULT_FRAME_SIZE,
 };
 use nix::errno::Errno;
 
@@ -24,7 +25,7 @@ use super::{
     frame::{AppFrame, Chunk},
     libxdp::populate_fill_ring,
     mmap::MMapArea,
-    UMemAccessor,
+    AccessorRef,
 };
 
 pub struct UMemBuilder {
@@ -99,6 +100,8 @@ impl UMemBuilder {
 #[derive(Debug)]
 pub struct FillQueue(pub xsk_ring_prod);
 
+unsafe impl Send for FillQueue {}
+
 impl Default for FillQueue {
     fn default() -> Self {
         FillQueue(xsk_ring_prod {
@@ -116,6 +119,8 @@ impl Default for FillQueue {
 
 #[derive(Debug)]
 pub struct CompletionQueue(pub xsk_ring_cons);
+
+unsafe impl Send for CompletionQueue {}
 
 impl Default for CompletionQueue {
     fn default() -> Self {
@@ -288,27 +293,6 @@ impl DedicatedAccessor {
         Ok(actual_filled)
     }
 
-    pub fn allocate(
-        umem_rc: &Rc<RefCell<Self>>,
-        n: usize,
-    ) -> Result<Vec<AppFrame<Self>>, CamelliaError> {
-        let mut umem = umem_rc.borrow_mut();
-        if umem.base.chunks.len() < n {
-            return Err(CamelliaError::ResourceExhausted(format!(
-                "request {} frames, but only {} frames are available",
-                n,
-                umem.base.chunks.len()
-            )));
-        }
-
-        Ok(umem
-            .base
-            .chunks
-            .drain(0..n)
-            .map(|chunk| AppFrame::from_chunk(chunk, umem_rc.clone()))
-            .collect())
-    }
-
     pub fn free(&mut self, chunk: Chunk) {
         self.base.chunks.push(chunk);
     }
@@ -362,47 +346,63 @@ impl From<UMem> for Rc<RefCell<DedicatedAccessor>> {
     }
 }
 
-impl UMemAccessor for DedicatedAccessor {
+pub type DedicatedAccessorRef = Rc<RefCell<DedicatedAccessor>>;
+
+impl AccessorRef for DedicatedAccessorRef {
     type UMemRef = UMem;
-    type AccessorRef = Rc<RefCell<DedicatedAccessor>>;
 
-    fn allocate(
-        umem_rc: &Self::AccessorRef,
-        n: usize,
-    ) -> Result<Vec<AppFrame<Self>>, CamelliaError> {
-        DedicatedAccessor::allocate(umem_rc, n)
+    fn allocate(&self, n: usize) -> Result<Vec<AppFrame<Self>>, CamelliaError> {
+        let mut umem = self.borrow_mut();
+        if umem.base.chunks.len() < n {
+            return Err(CamelliaError::ResourceExhausted(format!(
+                "request {} frames, but only {} frames are available",
+                n,
+                umem.base.chunks.len()
+            )));
+        }
+
+        Ok(umem
+            .base
+            .chunks
+            .drain(0..n)
+            .map(|chunk| AppFrame::from_chunk(chunk, self.clone()))
+            .collect())
     }
 
-    fn free(umem_rc: &Self::AccessorRef, chunk: Chunk) {
-        umem_rc.borrow_mut().free(chunk)
+    fn free(&self, chunk: Chunk) {
+        self.borrow_mut().free(chunk)
     }
 
-    fn fill(umem_rc: &Self::AccessorRef, n: usize) -> Result<usize, CamelliaError> {
-        umem_rc.borrow_mut().fill(n)
+    fn fill(&self, n: usize) -> Result<usize, CamelliaError> {
+        self.borrow_mut().fill(n)
     }
 
-    fn fill_inner(umem_rc: &Self::AccessorRef) -> Ref<xsk_ring_prod> {
-        Ref::map(umem_rc.borrow(), |umem| &umem.base.fill.0)
+    fn need_wakeup(&self) -> bool {
+        unsafe {
+            xsk_ring_prod__needs_wakeup(&*Ref::map(self.borrow(), |umem: &DedicatedAccessor| {
+                &umem.base.fill.0
+            })) != 0
+        }
     }
 
-    fn recycle(umem_rc: &Self::AccessorRef) -> Result<usize, CamelliaError> {
-        umem_rc.borrow_mut().recycle()
+    fn recycle(&self) -> Result<usize, CamelliaError> {
+        self.borrow_mut().recycle()
     }
 
-    fn extract_recv(umem_rc: &Self::AccessorRef, xdp_addr: u64) -> Chunk {
-        umem_rc.borrow_mut().extract_recv(xdp_addr)
+    fn extract_recv(&self, xdp_addr: u64) -> Chunk {
+        self.borrow_mut().extract_recv(xdp_addr)
     }
 
-    fn equal(umem_rc: &Self::AccessorRef, other: &Self::AccessorRef) -> bool {
-        Rc::ptr_eq(umem_rc, other)
+    fn equal(&self, other: &Self) -> bool {
+        Rc::ptr_eq(self, other)
     }
 
-    fn register_send(umem_rc: &Self::AccessorRef, chunk: Chunk) {
-        umem_rc.borrow_mut().register_send(chunk)
+    fn register_send(&self, chunk: Chunk) {
+        self.borrow_mut().register_send(chunk)
     }
 
-    fn inner(umem_rc: &Self::AccessorRef) -> usize {
-        umem_rc.borrow().inner() as usize
+    fn inner(&self) -> usize {
+        self.borrow().inner() as usize
     }
 }
 
@@ -431,12 +431,10 @@ mod test {
     fn test_frame_write() {
         let umem = UMemBuilder::new().num_chunks(1024).build().unwrap();
 
-        let accessor = Rc::new(RefCell::new(DedicatedAccessor::new(umem).unwrap()));
+        let accessor =
+            Rc::new(RefCell::new(DedicatedAccessor::new(umem).unwrap())) as DedicatedAccessorRef;
 
-        let mut frame = DedicatedAccessor::allocate(&accessor, 1)
-            .unwrap()
-            .pop()
-            .unwrap();
+        let mut frame = accessor.allocate(1).unwrap().pop().unwrap();
 
         let mut buffer = frame.raw_buffer_append(1024).unwrap();
 

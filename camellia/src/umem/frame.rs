@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::error::CamelliaError;
 use crate::umem::mmap::MMapArea;
-use crate::umem::UMemAccessor;
+use crate::umem::AccessorRef;
 
 #[derive(Debug)]
 pub struct Chunk {
@@ -53,19 +53,20 @@ impl Chunk {
     }
 }
 
+#[derive(Debug)]
 pub struct Frame<M>
 where
-    M: UMemAccessor,
+    M: AccessorRef,
 {
     chunk: Option<Chunk>,
-    umem: M::AccessorRef,
+    umem: M,
     offset: usize,
     len: usize,
 }
 
 impl<M> Drop for Frame<M>
 where
-    M: UMemAccessor,
+    M: AccessorRef,
 {
     fn drop(&mut self) {
         // panic if RxFrame still contains a chunk
@@ -77,7 +78,7 @@ where
 
 impl<M> Frame<M>
 where
-    M: UMemAccessor,
+    M: AccessorRef,
 {
     pub fn raw_buffer(&self) -> &[u8] {
         let chunk = self.chunk.as_ref().unwrap();
@@ -134,20 +135,25 @@ where
         self.chunk.take().unwrap()
     }
 
-    pub fn umem(&self) -> &M::AccessorRef {
+    pub fn umem(&self) -> &M {
         &self.umem
     }
 }
 
-pub struct RxFrame<M: UMemAccessor>(Frame<M>);
-pub struct TxFrame<M: UMemAccessor>(Frame<M>);
-pub struct AppFrame<M: UMemAccessor>(Frame<M>);
+#[derive(Debug)]
+pub struct RxFrame<M: AccessorRef>(pub Frame<M>);
+
+#[derive(Debug)]
+pub struct TxFrame<M: AccessorRef>(pub Frame<M>);
+
+#[derive(Debug)]
+pub struct AppFrame<M: AccessorRef>(pub Frame<M>);
 
 impl<M> AppFrame<M>
 where
-    M: UMemAccessor,
+    M: AccessorRef,
 {
-    pub fn from_chunk(chunk: Chunk, umem: M::AccessorRef) -> Self {
+    pub fn from_chunk(chunk: Chunk, umem: M) -> Self {
         AppFrame(Frame {
             chunk: Some(chunk),
             offset: 0,
@@ -180,7 +186,7 @@ where
         self.0.is_empty()
     }
 
-    pub fn umem(&self) -> &M::AccessorRef {
+    pub fn umem(&self) -> &M {
         self.0.umem()
     }
 
@@ -191,9 +197,9 @@ where
 
 impl<M> RxFrame<M>
 where
-    M: UMemAccessor,
+    M: AccessorRef,
 {
-    pub fn from_chunk(chunk: Chunk, umem: M::AccessorRef, xdp_addr: usize, xdp_len: usize) -> Self {
+    pub fn from_chunk(chunk: Chunk, umem: M, xdp_addr: usize, xdp_len: usize) -> Self {
         if !chunk.is_xdp_array_valid(xdp_addr, xdp_len) {
             panic!(
                 "{}",
@@ -224,16 +230,16 @@ where
         self.0.is_empty()
     }
 
-    pub fn umem(&self) -> &M::AccessorRef {
+    pub fn umem(&self) -> &M {
         self.0.umem()
     }
 }
 
 impl<M> TxFrame<M>
 where
-    M: UMemAccessor,
+    M: AccessorRef,
 {
-    pub fn from_chunk(chunk: Chunk, umem: M::AccessorRef) -> Self {
+    pub fn from_chunk(chunk: Chunk, umem: M) -> Self {
         TxFrame(Frame {
             chunk: Some(chunk),
             umem,
@@ -254,7 +260,7 @@ where
         self.0.is_empty()
     }
 
-    pub fn umem(&self) -> &M::AccessorRef {
+    pub fn umem(&self) -> &M {
         self.0.umem()
     }
 
@@ -263,19 +269,19 @@ where
     }
 }
 
-impl<M: UMemAccessor> From<AppFrame<M>> for TxFrame<M> {
+impl<M: AccessorRef> From<AppFrame<M>> for TxFrame<M> {
     fn from(app_frame: AppFrame<M>) -> Self {
         TxFrame(app_frame.0)
     }
 }
 
-impl<M: UMemAccessor> From<RxFrame<M>> for TxFrame<M> {
+impl<M: AccessorRef> From<RxFrame<M>> for TxFrame<M> {
     fn from(rx_frame: RxFrame<M>) -> Self {
         TxFrame(rx_frame.0)
     }
 }
 
-impl<M: UMemAccessor> From<RxFrame<M>> for AppFrame<M> {
+impl<M: AccessorRef> From<RxFrame<M>> for AppFrame<M> {
     fn from(rx_frame: RxFrame<M>) -> Self {
         AppFrame(rx_frame.0)
     }

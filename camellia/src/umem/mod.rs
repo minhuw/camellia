@@ -1,7 +1,3 @@
-use std::cell::Ref;
-
-use libxdp_sys::xsk_ring_prod;
-
 use crate::error::CamelliaError;
 
 use self::frame::{AppFrame, Chunk};
@@ -12,28 +8,24 @@ pub mod libxdp;
 pub mod mmap;
 pub mod shared;
 
-pub trait UMemAccessor: Sized {
+pub trait AccessorRef: Sized + Clone {
     type UMemRef;
-    type AccessorRef: Clone;
 
-    fn inner(umem_rc: &Self::AccessorRef) -> usize;
+    fn inner(&self) -> usize;
 
-    fn fill_inner(umem_rc: &Self::AccessorRef) -> Ref<xsk_ring_prod>;
+    fn need_wakeup(&self) -> bool;
 
-    fn allocate(
-        umem_rc: &Self::AccessorRef,
-        size: usize,
-    ) -> Result<Vec<AppFrame<Self>>, CamelliaError>;
+    fn allocate(&self, size: usize) -> Result<Vec<AppFrame<Self>>, CamelliaError>;
 
-    fn fill(umem_rc: &Self::AccessorRef, n: usize) -> Result<usize, CamelliaError>;
+    fn fill(&self, n: usize) -> Result<usize, CamelliaError>;
 
-    fn recycle(umem_rc: &Self::AccessorRef) -> Result<usize, CamelliaError>;
+    fn recycle(&self) -> Result<usize, CamelliaError>;
 
-    fn free(umem_rc: &Self::AccessorRef, chunk: Chunk);
+    fn free(&self, chunk: Chunk);
 
-    fn register_send(umem_rc: &Self::AccessorRef, chunk: Chunk);
+    fn register_send(&self, chunk: Chunk);
 
-    fn extract_recv(umem_rc: &Self::AccessorRef, xdp_addr: u64) -> Chunk;
+    fn extract_recv(&self, xdp_addr: u64) -> Chunk;
 
-    fn equal(umem_rc: &Self::AccessorRef, other: &Self::AccessorRef) -> bool;
+    fn equal(&self, other: &Self) -> bool;
 }
