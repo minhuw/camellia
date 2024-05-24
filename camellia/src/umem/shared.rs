@@ -112,12 +112,25 @@ impl SharedAccessor {
     }
 }
 
-pub type SharedAccessorRef = Arc<Mutex<SharedAccessor>>;
+#[derive(Clone, Debug)]
+pub struct SharedAccessorRef {
+    inner: Arc<Mutex<SharedAccessor>>,
+    id: usize,
+}
+
+impl SharedAccessorRef {
+    pub fn new(inner: Arc<Mutex<SharedAccessor>>) -> Self {
+        Self {
+            inner: inner.clone(),
+            id: inner.lock().unwrap().shared_umem.lock().unwrap().inner() as usize,
+        }
+    }
+}
 
 impl AccessorRef for SharedAccessorRef {
     type UMemRef = Arc<Mutex<UMem>>;
     fn allocate(&self, n: usize) -> Result<Vec<AppFrame<Self>>, CamelliaError> {
-        let mut shared_umem = self.lock().unwrap();
+        let mut shared_umem = self.inner.lock().unwrap();
         shared_umem.pre_alloc(n)?;
 
         Ok(shared_umem
@@ -129,38 +142,40 @@ impl AccessorRef for SharedAccessorRef {
 
     fn equal(&self, other: &Self) -> bool {
         // We compare address of SharedUMem instead of SharedUMemNode
-        Arc::ptr_eq(self, other)
-            || Arc::ptr_eq(
-                &self.lock().unwrap().shared_umem,
-                &other.lock().unwrap().shared_umem,
-            )
+        self.id == other.id
     }
 
     fn fill(&self, n: usize) -> Result<usize, CamelliaError> {
-        self.lock().unwrap().fill(n)
+        self.inner.lock().unwrap().fill(n)
     }
 
     fn free(&self, chunk: Chunk) {
-        self.lock().unwrap().free(chunk)
+        self.inner.lock().unwrap().free(chunk)
     }
 
     fn extract_recv(&self, xdp_addr: u64) -> Chunk {
-        self.lock().unwrap().extract_recv(xdp_addr)
+        self.inner.lock().unwrap().extract_recv(xdp_addr)
     }
 
     fn register_send(&self, chunk: Chunk) {
-        self.lock().unwrap().register_send(chunk)
+        self.inner.lock().unwrap().register_send(chunk)
     }
 
     fn inner(&self) -> usize {
-        self.lock().unwrap().shared_umem.lock().unwrap().inner() as usize
+        self.inner
+            .lock()
+            .unwrap()
+            .shared_umem
+            .lock()
+            .unwrap()
+            .inner() as usize
     }
 
     fn need_wakeup(&self) -> bool {
-        unsafe { xsk_ring_prod__needs_wakeup(&self.lock().unwrap().fill.0) != 0 }
+        unsafe { xsk_ring_prod__needs_wakeup(&self.inner.lock().unwrap().fill.0) != 0 }
     }
 
     fn recycle(&self) -> Result<usize, CamelliaError> {
-        self.lock().unwrap().recycle()
+        self.inner.lock().unwrap().recycle()
     }
 }

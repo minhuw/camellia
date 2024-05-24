@@ -382,11 +382,11 @@ impl XskSocket<SharedAccessorRef> {
             }
         }
 
-        let umem_accessor = Arc::new(Mutex::new(SharedAccessor::new(
+        let umem_accessor = SharedAccessorRef::new(Arc::new(Mutex::new(SharedAccessor::new(
             umem.clone(),
             fill_queue,
             completion_queue,
-        )?));
+        )?)));
 
         // TODO: validate that the RX ring is fulfilled
         umem_accessor.fill(config.rx_size as usize).unwrap();
