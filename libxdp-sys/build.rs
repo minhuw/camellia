@@ -15,6 +15,7 @@ fn build_bpftool(out_path: &Path) -> Result<PathBuf> {
     let compile_result = Command::new("make")
         .current_dir(src_path.join("bpftool/src"))
         .env("OUTPUT", out_path.clone())
+        .env("CLANG", "Nope")
         .output()
         .expect("unable to compile bpftool");
 
