@@ -58,6 +58,7 @@
             llvmPackages_15.libllvm
             llvmPackages_15.libclang
             rust-bin.stable.latest.default
+            jinja2-cli
             m4
             zlib
             iperf

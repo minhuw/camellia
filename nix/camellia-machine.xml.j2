@@ -1,6 +1,6 @@
 <domain type='kvm'>
-    <name>camellia</name>
-    <uuid>7da272e7-dc6b-4169-8e44-0e74885e69cb</uuid>
+    <name>{{ domain_name }}</name>
+    <uuid>{{ uuid }}</uuid>
     <os>
         <type>hvm</type>
         <bootmenu enable='yes' timeout='3000'/>
@@ -18,7 +18,7 @@
     <devices>
         <disk type='file' device='disk'>
             <driver name='qemu' type='qcow2'/>
-            <source file='/opt/camellia/nixos.qcow2'/>
+            <source file='{{ storage }}'/>
             <target dev='hda'/>
         </disk>
         <serial type='pty'>
@@ -27,6 +27,13 @@
         <interface type='network'>
             <source network='default'/>
             <mac address='72:34:54:dd:f3:25'/>
+        </interface>
+        <interface type='hostdev' managed='yes'>
+            <driver name='vfio'/>
+            <source>
+                <address type='pci' domain='0x0000' bus='0x{{ nic.bus }}' slot='0x{{ nic.slot }}' function='0x{{ nic.function }}'/>
+            </source>
+            <mac address='{{ mac_address }}'/>
         </interface>
     </devices>
     <features>
