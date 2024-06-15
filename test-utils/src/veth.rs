@@ -97,50 +97,6 @@ impl VethPairBuilder {
     }
 }
 
-impl Drop for VethPair {
-    fn drop(&mut self) {
-        {
-            let _guard = self.left.namespace.enter().unwrap();
-
-            Command::new("ethtool")
-                .arg("-S")
-                .arg(&self.left.name)
-                .spawn()
-                .unwrap()
-                .wait()
-                .unwrap();
-        }
-        {
-            let _guard = self.right.namespace.enter().unwrap();
-
-            Command::new("ethtool")
-                .arg("-S")
-                .arg(&self.right.name)
-                .spawn()
-                .unwrap()
-                .wait()
-                .unwrap();
-        }
-
-        let _guard = self.left.namespace.enter().unwrap();
-
-        let output = Command::new("ip")
-            .arg("link")
-            .arg("del")
-            .arg(&self.left.name)
-            .output();
-
-        if let Err(e) = output {
-            eprintln!("Failed to delete veth pair: {} (you may need to delete it manually with 'sudo ip link del {}')", e, &self.left.name);
-        } else {
-            let output = output.unwrap();
-            if !output.status.success() {
-                eprintln!("Failed to delete veth pair: {} (you may need to delete it manually with 'sudo ip link del {}')", String::from_utf8_lossy(&output.stderr), &self.left.name);
-            }
-        }
-    }
-}
-
 pub struct VethDevice {
     pub name: String,
     pub index: u32,

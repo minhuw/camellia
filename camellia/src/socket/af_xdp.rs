@@ -332,12 +332,26 @@ enum ScheduleMode {
     BusyPolling,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct XskStat {
+    pub rx_packets: u64,
+    pub rx_bytes: u64,
+    pub rx_wakeup: u64,
+    pub rx_batch: u64,
+
+    pub tx_packets: u64,
+    pub tx_bytes: u64,
+    pub tx_wakeup: u64,
+    pub tx_batch: u64,
+}
+
 pub struct XskSocket<M: AccessorRef> {
     inner: *mut xsk_socket,
     umem_accessor: M,
     rx: Pin<Box<RxQueue>>,
     tx: Pin<Box<TxQueue>>,
     schedule_mode: ScheduleMode,
+    pub stat: XskStat,
 }
 
 unsafe impl<M> Send for XskSocket<M> where M: AccessorRef {}
@@ -397,6 +411,7 @@ impl XskSocket<SharedAccessorRef> {
             rx: rx_queue,
             tx: tx_queue,
             schedule_mode,
+            stat: XskStat::default(),
         })
     }
 }
@@ -446,6 +461,7 @@ impl XskSocket<DedicatedAccessorRef> {
             rx: rx_queue,
             tx: tx_queue,
             schedule_mode,
+            stat: XskStat::default(),
         })
     }
 }
@@ -470,13 +486,17 @@ where
             match self.schedule_mode {
                 ScheduleMode::Cooperative | ScheduleMode::Legacy => {
                     if M::need_wakeup(&self.umem_accessor) {
+                        self.stat.rx_wakeup += 1;
                         wakeup_rx(self.as_fd())?;
                     }
                 }
                 ScheduleMode::BusyPolling => {
+                    self.stat.rx_wakeup += 1;
                     wakeup_rx(self.as_fd())?;
                 }
             }
+        } else {
+            self.stat.rx_batch += 1;
         }
 
         assert!((received as usize) <= size);
@@ -488,6 +508,7 @@ where
                     ((*rx_desp).addr, (*rx_desp).len)
                 };
 
+                self.stat.rx_bytes += len as u64;
                 let chunk = M::extract_recv(&self.umem_accessor, addr);
                 RxFrame::from_chunk(
                     chunk,
@@ -501,6 +522,8 @@ where
         unsafe {
             xsk_ring_cons__release(&mut self.rx.inner, received);
         }
+
+        self.stat.rx_packets += received as u64;
 
         // TODO: add an option controlling whether to fill the umem eagerly
         let filled = M::fill(&self.umem_accessor, received as usize)?;
@@ -556,6 +579,10 @@ where
 
         let actual_sent = min(reserved_desp, iter.len() as u32);
 
+        if actual_sent > 0 {
+            self.stat.tx_batch += 1;
+        }
+
         for (send_index, frame) in iter.enumerate() {
             if (send_index as u32) < actual_sent {
                 let frame: TxFrame<M> = frame.into();
@@ -575,12 +602,14 @@ where
                     (*tx_desc).len = frame.len() as u32;
                     (*tx_desc).options = 0;
                 };
-
-                M::register_send(&self.umem_accessor, frame.take())
+                self.stat.tx_bytes += frame.len() as u64;
+                M::register_send(&self.umem_accessor, frame.take());
             } else {
                 remaining.push(frame);
             }
         }
+
+        self.stat.tx_packets += actual_sent as u64;
 
         unsafe {
             xsk_ring_prod__submit(&mut self.tx.inner, actual_sent);
@@ -590,10 +619,12 @@ where
             // When cooperate schedule is disabled, we always need to wake up the TX queue
             // https://lore.kernel.org/bpf/20201130185205.196029-5-bjorn.topel@gmail.com/
             ScheduleMode::Legacy | ScheduleMode::BusyPolling => {
+                self.stat.tx_wakeup += 1;
                 wakeup_tx(self.as_fd())?;
             }
             ScheduleMode::Cooperative => {
                 if unsafe { xsk_ring_prod__needs_wakeup(&self.tx.inner) != 0 } {
+                    self.stat.tx_wakeup += 1;
                     wakeup_tx(self.as_fd())?;
                 }
             }

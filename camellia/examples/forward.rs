@@ -9,6 +9,7 @@ use camellia::{
     socket::af_xdp::XskSocketBuilder,
     umem::{base::UMemBuilder, shared::SharedAccessorRef},
 };
+use humansize::{make_format, DECIMAL};
 use nix::sys::epoll::{self, EpollCreateFlags, EpollEvent};
 use test_utils::{netns::NetNs, stdenv::setup_veth, veth::MacAddr};
 
@@ -206,6 +207,17 @@ fn prepare_env(
                 }
             }
         }
+
+        let formatter = make_format(DECIMAL);
+
+        println!(
+            "left: rx_batch: {}, rx_packets: {}, rx_bytes: {}, rx_wakeup: {}, tx_batch: {}, tx_packets: {}, tx_bytes: {}, tx_wakeup: {}",
+            formatter(left_socket.stat.rx_batch), formatter(left_socket.stat.rx_packets), formatter(left_socket.stat.rx_bytes), formatter(left_socket.stat.rx_wakeup), formatter(left_socket.stat.tx_batch), formatter(left_socket.stat.tx_packets), formatter(left_socket.stat.tx_bytes), formatter(left_socket.stat.tx_wakeup)
+        );
+        println!(
+            "left: rx_batch: {}, rx_packets: {}, rx_bytes: {}, rx_wakeup: {}, tx_batch: {}, tx_packets: {}, tx_bytes: {}, tx_wakeup: {}",
+            formatter(right_socket.stat.rx_batch), formatter(right_socket.stat.rx_packets), formatter(right_socket.stat.rx_bytes), formatter(right_socket.stat.rx_wakeup), formatter(right_socket.stat.tx_batch), formatter(right_socket.stat.tx_packets), formatter(right_socket.stat.tx_bytes), formatter(right_socket.stat.tx_wakeup)
+        );
     });
 
     while !ready.load(std::sync::atomic::Ordering::SeqCst) {}
