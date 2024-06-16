@@ -1,7 +1,6 @@
 use std::{
     cell::{Ref, RefCell},
     cmp::min,
-    collections::HashMap,
     fmt::Display,
     ops::{AddAssign, SubAssign},
     os::{fd::AsRawFd, raw::c_void},
@@ -139,8 +138,8 @@ impl Default for CompletionQueue {
 
 #[derive(Debug)]
 pub struct UMem {
-    area: Arc<MMapArea>,
-    pub chunks: Vec<Chunk>,
+    pub area: Arc<MMapArea>,
+    pub chunks: Vec<usize>,
     // We need to Pin rings because their addresses are stored in libxdp code
     pub fill: Pin<Box<FillQueue>>,
     pub completion: Pin<Box<CompletionQueue>>,
@@ -204,11 +203,7 @@ impl UMem {
         };
 
         for i in 0..num_chunks {
-            umem.chunks.push(Chunk {
-                xdp_address: (i * chunk_size) as usize,
-                size: chunk_size as usize,
-                mmap_area: umem.area.clone(),
-            });
+            umem.chunks.push((i * chunk_size) as usize)
         }
 
         Ok(umem)
@@ -226,10 +221,34 @@ impl UMem {
                 self.chunks.len()
             )));
         }
-        Ok(self.chunks.drain(0..n).collect())
+        Ok(self
+            .chunks
+            .drain(0..n)
+            .map(|address| Chunk {
+                xdp_address: address,
+                size: self.chunk_size as usize,
+                mmap_area: self.area.clone(),
+            })
+            .collect())
     }
 
     pub fn free(&mut self, chunks: impl IntoIterator<Item = Chunk>) {
+        self.chunks
+            .extend(chunks.into_iter().map(|chunk| chunk.xdp_address));
+    }
+
+    pub fn allocate_raw(&mut self, n: usize) -> Result<Vec<usize>, CamelliaError> {
+        if self.chunks.len() < n {
+            return Err(CamelliaError::InvalidArgument(format!(
+                "SharedUMem::allocate: {} chunks requested, but only {} chunks available",
+                n,
+                self.chunks.len()
+            )));
+        }
+        Ok(self.chunks.drain(0..n).collect())
+    }
+
+    pub fn free_raw(&mut self, chunks: impl IntoIterator<Item = usize>) {
         self.chunks.extend(chunks);
     }
 }
@@ -263,16 +282,14 @@ impl AsRawFd for UMem {
 
 #[derive(Debug)]
 pub struct DedicatedAccessor {
-    filled_chunks: HashMap<u64, Chunk>,
-    tx_chunks: HashMap<u64, Chunk>,
     base: UMem,
+    tx_issued_num: u32,
 }
 
 impl DedicatedAccessor {
     pub fn new(base: UMem) -> Result<Self, CamelliaError> {
         let umem = DedicatedAccessor {
-            filled_chunks: HashMap::new(),
-            tx_chunks: HashMap::new(),
+            tx_issued_num: 0,
             base,
         };
 
@@ -284,17 +301,12 @@ impl DedicatedAccessor {
     }
 
     pub fn fill(&mut self, n: usize) -> Result<usize, CamelliaError> {
-        let actual_filled = populate_fill_ring(
-            &mut self.base.fill.0,
-            n,
-            &mut self.base.chunks,
-            &mut self.filled_chunks,
-        );
+        let actual_filled = populate_fill_ring(&mut self.base.fill.0, n, &mut self.base.chunks);
         Ok(actual_filled)
     }
 
     pub fn free(&mut self, chunk: Chunk) {
-        self.base.chunks.push(chunk);
+        self.base.free([chunk]);
     }
 
     pub fn recycle(&mut self) -> Result<usize, CamelliaError> {
@@ -302,7 +314,7 @@ impl DedicatedAccessor {
         let completed = unsafe {
             xsk_ring_cons__peek(
                 &mut self.base.completion.0,
-                self.tx_chunks.len() as u32,
+                self.tx_issued_num,
                 &mut start_index,
             )
         };
@@ -312,9 +324,7 @@ impl DedicatedAccessor {
                 *xsk_ring_cons__comp_addr(&self.base.completion.0, start_index + complete_index)
             };
 
-            self.base
-                .chunks
-                .push(self.tx_chunks.remove(&xdp_addr).unwrap());
+            self.base.free_raw([xdp_addr as usize]);
         }
 
         unsafe {
@@ -327,21 +337,23 @@ impl DedicatedAccessor {
     pub fn extract_recv(&mut self, xdp_addr: u64) -> Chunk {
         let base_address = xdp_addr - (xdp_addr % (self.base.chunk_size as u64));
         // The chunk must be filled before
-
-        self.filled_chunks.remove(&base_address).unwrap()
+        Chunk {
+            xdp_address: base_address as usize,
+            size: self.base.chunk_size as usize,
+            mmap_area: self.base.area.clone(),
+        }
     }
 
-    pub fn register_send(&mut self, chunk: Chunk) {
-        self.tx_chunks.insert(chunk.xdp_address() as u64, chunk);
+    pub fn register_send(&mut self, _chunk: Chunk) {
+        self.tx_issued_num += 1;
     }
 }
 
 impl From<UMem> for Rc<RefCell<DedicatedAccessor>> {
     fn from(value: UMem) -> Self {
         Rc::new(RefCell::new(DedicatedAccessor {
-            filled_chunks: HashMap::new(),
-            tx_chunks: HashMap::new(),
             base: value,
+            tx_issued_num: 0,
         }))
     }
 }
@@ -363,8 +375,8 @@ impl AccessorRef for DedicatedAccessorRef {
 
         Ok(umem
             .base
-            .chunks
-            .drain(0..n)
+            .allocate(n)?
+            .into_iter()
             .map(|chunk| AppFrame::from_chunk(chunk, self.clone()))
             .collect())
     }

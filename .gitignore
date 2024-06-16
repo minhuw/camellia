@@ -21,4 +21,4 @@ devenv.local.nix
 
 # perf data and flamegraph
 perf.data*
-flamegraph.svg
+*.svg
