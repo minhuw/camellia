@@ -1,6 +1,6 @@
 use camellia::{
     socket::af_xdp::XskSocketBuilder,
-    umem::{base::UMemBuilder, shared::SharedAccessorRef},
+    umem::{base::UMemBuilder, frame::AppFrame, shared::SharedAccessorRef},
 };
 use clap::Parser;
 use std::sync::{Arc, Mutex};
@@ -36,10 +36,13 @@ fn main() {
                     etherparse::Ethernet2Header::from_slice(frame.raw_buffer()).unwrap();
 
                 std::mem::swap(&mut ether_header.source, &mut ether_header.destination);
+                let mut frame: AppFrame<_> = frame.into();
+                ether_header.write_to_slice(frame.raw_buffer_mut()).unwrap();
                 frame
             })
             .collect();
-
-        socket.send_bulk(frames).unwrap();
+        if !frames.is_empty() {
+            socket.send_bulk(frames).unwrap();
+        }
     }
 }

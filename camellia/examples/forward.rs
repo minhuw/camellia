@@ -101,8 +101,10 @@ fn prepare_env(
 
                 total_left_to_right += frames.len();
 
-                let remaining = right_socket.send_bulk(frames).unwrap();
-                assert_eq!(remaining.len(), 0);
+                if !frames.is_empty() {
+                    let remaining = right_socket.send_bulk(frames).unwrap();
+                    assert_eq!(remaining.len(), 0);
+                }
 
                 let frames = right_socket.recv_bulk(batch_size).unwrap();
                 if frames.len() != 0 {
@@ -128,8 +130,10 @@ fn prepare_env(
 
                 total_right_to_left += frames.len();
 
-                let remaining = left_socket.send_bulk(frames).unwrap();
-                assert_eq!(remaining.len(), 0);
+                if !frames.is_empty() {
+                    let remaining = left_socket.send_bulk(frames).unwrap();
+                    assert_eq!(remaining.len(), 0);
+                }
             }
             println!(
                 "forward thread exits normally. left=>right: {}, right=>left: {}",
@@ -178,8 +182,9 @@ fn prepare_env(
                             .flatten()
                             .collect();
 
-                        right_socket.send_bulk(frames).unwrap();
-                        // assert_eq!(remaining.len(), 0);
+                        if !frames.is_empty() {
+                            right_socket.send_bulk(frames).unwrap();
+                        }
                     } else if fd == right_socket.as_fd().as_raw_fd() {
                         let frames = right_socket.recv_bulk(batch_size).unwrap();
                         let frames: Vec<_> = frames
@@ -200,7 +205,9 @@ fn prepare_env(
                             .flatten()
                             .collect();
 
-                        left_socket.send_bulk(frames).unwrap();
+                        if !frames.is_empty() {
+                            left_socket.send_bulk(frames).unwrap();
+                        }
                     } else {
                         panic!("unexpected fd: {}", fd);
                     }
