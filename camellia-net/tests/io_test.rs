@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 
-use camellia::{
+use camellia_net::{
     socket::af_xdp::XskSocketBuilder,
     umem::{
         base::{DedicatedAccessorRef, UMemBuilder},
@@ -30,7 +30,7 @@ fn setup_veth() -> VethPair {
 fn build_a_packet(
     veth_pair: &VethPair,
     mut frame: AppFrame<DedicatedAccessorRef>,
-) -> camellia::umem::frame::AppFrame<DedicatedAccessorRef> {
+) -> camellia_net::umem::frame::AppFrame<DedicatedAccessorRef> {
     let builder = PacketBuilder::ethernet2(
         veth_pair.left.mac_addr.bytes(),
         veth_pair.right.mac_addr.bytes(),

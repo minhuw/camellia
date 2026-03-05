@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use camellia::{
+use camellia_net::{
     socket::af_xdp::XskSocketBuilder,
     umem::{base::UMemBuilder, shared::SharedAccessorRef},
 };

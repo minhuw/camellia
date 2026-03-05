@@ -1,7 +1,7 @@
 [workspace]
 members = [
     "libxdp-sys",
-    "camellia",
+    "camellia-net",
     "test-utils"
 ]
 resolver = "2"
