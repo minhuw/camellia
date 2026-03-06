@@ -15,7 +15,10 @@ Vagrant.configure("2") do |config|
     lv.cpus = 4
   end
 
-  config.vm.synced_folder ".", "/home/vagrant/camellia-net"
+  config.vm.synced_folder ".", "/home/vagrant/camellia-net",
+    type: "9p",
+    accessmode: "mapped",
+    mount: true
 
   config.vm.provision "shell", inline: <<-SHELL
     set -eux
