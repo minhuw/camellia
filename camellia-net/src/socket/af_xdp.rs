@@ -647,7 +647,7 @@ impl<M> AsFd for XskSocket<M>
 where
     M: AccessorRef,
 {
-    fn as_fd(&self) -> BorrowedFd {
+    fn as_fd(&self) -> BorrowedFd<'_> {
         unsafe { BorrowedFd::borrow_raw(xsk_socket__fd(self.inner)) }
     }
 }

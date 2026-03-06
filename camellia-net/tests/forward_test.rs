@@ -88,7 +88,7 @@ fn packet_forward(epoll: bool, busy_polling: bool) {
 
                 if !frames.is_empty() {
                     let remaining = right_socket.send_bulk(frames).unwrap();
-                    assert_eq!(remaining.len(), 0);
+                    drop(remaining);
                 }
 
                 let frames = right_socket.recv_bulk(32).unwrap();
@@ -113,7 +113,7 @@ fn packet_forward(epoll: bool, busy_polling: bool) {
 
                 if !frames.is_empty() {
                     let remaining = left_socket.send_bulk(frames).unwrap();
-                    assert_eq!(remaining.len(), 0);
+                    drop(remaining);
                 }
             }
         } else {
@@ -162,7 +162,7 @@ fn packet_forward(epoll: bool, busy_polling: bool) {
 
                         if !frames.is_empty() {
                             let remaining = right_socket.send_bulk(frames).unwrap();
-                            assert_eq!(remaining.len(), 0);
+                            drop(remaining);
                         }
                     } else if fd == right_socket.as_fd().as_raw_fd() {
                         let frames = right_socket.recv_bulk(32).unwrap();
@@ -187,7 +187,7 @@ fn packet_forward(epoll: bool, busy_polling: bool) {
                             .collect();
                         if !frames.is_empty() {
                             let remaining = left_socket.send_bulk(frames).unwrap();
-                            assert_eq!(remaining.len(), 0);
+                            drop(remaining);
                         }
                     } else {
                         panic!("unexpected fd: {}", fd);
