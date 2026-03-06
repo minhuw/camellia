@@ -1,6 +1,5 @@
 [workspace]
 members = [
-    "libxdp-sys",
     "camellia-net",
     "test-utils"
 ]
