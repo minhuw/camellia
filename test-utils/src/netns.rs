@@ -53,6 +53,28 @@ impl DefaultEnv {
         Ok(())
     }
 
+    /// Unmount all stacked mounts at the given path, including those from
+    /// shared mount propagation. Uses non-lazy unmount to ensure mounts are
+    /// actually removed before returning.
+    fn umount_ns_all<P: AsRef<Path>>(path: P) -> Result<()> {
+        let path = path.as_ref();
+        loop {
+            match umount2(path, MntFlags::empty()) {
+                Ok(()) => continue,
+                Err(nix::errno::Errno::EBUSY) => {
+                    let _ = umount2(path, MntFlags::MNT_DETACH);
+                    continue;
+                }
+                Err(nix::errno::Errno::EINVAL) | Err(nix::errno::Errno::ENOENT) => break,
+                Err(e) => {
+                    return Err(anyhow::anyhow!("unable to umount {}: {e}", path.display()))
+                }
+            }
+        }
+        let _ = std::fs::remove_file(path);
+        Ok(())
+    }
+
     fn persistent_internal<P: AsRef<Path>>(ns_path: P) -> Result<()> {
         // create an empty file at the mount point
         let _ = File::create(&ns_path)?;
@@ -158,6 +180,15 @@ impl Env for DefaultEnv {
         ns_path: P,
     ) -> Result<std::sync::Arc<NetNs>> {
         let full_path = self.persist_dir().join(ns_path.as_ref());
+
+        // Always attempt cleanup — shared mount propagation may leave mount
+        // entries even after the file has been removed by a previous drop.
+        // Recreate the file if needed so umount has a valid target path.
+        if !full_path.exists() {
+            let _ = File::create(&full_path);
+        }
+        Self::umount_ns_all(&full_path)?;
+
         self.persistent(&full_path)?;
 
         let file = File::open(&full_path)?;
@@ -299,10 +330,6 @@ impl<E: Env> NetNs<E> {
 
 impl<E: Env> Drop for NetNs<E> {
     fn drop(&mut self) {
-        let fd = self.file.as_raw_fd();
-        if let Err(e) = nix::unistd::close(fd) {
-            eprintln!("Failed to close netns: {e}");
-        }
         if let Err(e) = self.env.clone().remove(self) {
             eprintln!("Failed to remove netns: {e}");
         }

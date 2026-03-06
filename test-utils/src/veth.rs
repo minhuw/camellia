@@ -262,25 +262,35 @@ pub fn set_promiscuous(name: &str) {
     }
 }
 
-fn remount_sys() -> Result<tempfile::TempDir> {
+struct SysMount {
+    _temp_dir: TempDir,
+    path: std::path::PathBuf,
+}
+
+impl Drop for SysMount {
+    fn drop(&mut self) {
+        let _ = Command::new("umount").arg(&self.path).output();
+    }
+}
+
+fn remount_sys() -> Result<SysMount> {
     let temp_dir = TempDir::with_prefix("ns_sys")?;
+    let path = temp_dir.path().to_path_buf();
 
     Command::new("mount")
-        .args([
-            "-t",
-            "sysfs",
-            "none",
-            temp_dir.path().as_os_str().to_str().unwrap(),
-        ])
+        .args(["-t", "sysfs", "none", path.as_os_str().to_str().unwrap()])
         .spawn()?
         .wait()?;
 
-    Ok(temp_dir)
+    Ok(SysMount {
+        _temp_dir: temp_dir,
+        path,
+    })
 }
 
 pub fn set_rps_cores(name: &str, cores: &[usize]) {
-    let temp_dir = remount_sys().unwrap();
-    let sys_path = format!("{}/class/net/{}/queues", temp_dir.path().display(), name);
+    let sys_mount = remount_sys().unwrap();
+    let sys_path = format!("{}/class/net/{}/queues", sys_mount.path.display(), name);
 
     println!("set_rps_cores: sys_path={sys_path}");
 
@@ -306,12 +316,12 @@ pub fn set_rps_cores(name: &str, cores: &[usize]) {
 }
 
 pub fn set_preferred_busy_polling(name: &str) {
-    let tempdir = remount_sys().unwrap();
+    let sys_mount = remount_sys().unwrap();
 
     std::fs::write(
         format!(
             "{}/class/net/{}/napi_defer_hard_irqs",
-            tempdir.path().display(),
+            sys_mount.path.display(),
             name
         ),
         "2",
@@ -320,7 +330,7 @@ pub fn set_preferred_busy_polling(name: &str) {
     std::fs::write(
         format!(
             "{}/class/net/{}/gro_flush_timeout",
-            tempdir.path().display(),
+            sys_mount.path.display(),
             name
         ),
         "200000",
@@ -368,6 +378,18 @@ pub fn bind_namespace(name: &str, netns: &std::sync::Arc<NetNs>) -> Result<()> {
 impl VethDevice {
     pub fn peer(&self) -> Arc<VethDevice> {
         self.peer.get().unwrap().upgrade().unwrap()
+    }
+}
+
+impl Drop for VethDevice {
+    fn drop(&mut self) {
+        // Enter the device's namespace before deleting.
+        // Deleting one end of a veth pair removes the other automatically,
+        // so errors are expected and ignored.
+        let _guard = self.namespace.enter().ok();
+        let _ = Command::new("ip")
+            .args(["link", "del", &self.name])
+            .output();
     }
 }
 
